@@ -1,20 +1,13 @@
 {
   "type": "minecraft:crafting_shaped",
   "pattern": [
-    "DID",
-    " I ",
-    " I "
+    " D ",
+    " D ",
+    "III"
   ],
   "key": {
-    "D": {
-      "item": "minecraft:polished_diorite"
-    },
-    "I": {
-      "item": "minecraft:iron_block"
-    }
+    "D": { "item": "minecraft:polished_diorite" },
+    "I": { "item": "minecraft:iron_block" }
   },
-  "result": {
-    "item": "herostand:hero_stand",
-    "count": 1
-  }
+  "result": { "item": "herostand:hero_stand", "count": 1 }
 }
