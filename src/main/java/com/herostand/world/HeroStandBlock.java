@@ -37,26 +37,17 @@ public final class HeroStandBlock extends BaseEntityBlock {
         registerDefaultState(stateDefinition.any().setValue(FACING, Direction.NORTH));
     }
 
-    @Override
-    public RenderShape getRenderShape(BlockState state) {
-        return RenderShape.MODEL;
-    }
-
-    @Override
-    public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
-        return SHAPE;
-    }
+    @Override public RenderShape getRenderShape(BlockState state) { return RenderShape.MODEL; }
+    @Override public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) { return SHAPE; }
 
     @Nullable
-    @Override
-    public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
+    @Override public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
         return ModBlockEntities.HERO_STAND.get().create(pos, state);
     }
 
     @Nullable
-    @Override
-    public BlockState getStateForPlacement(BlockPlaceContext context) {
-        return defaultBlockState().setValue(FACING, context.getHorizontalDirection());
+    @Override public BlockState getStateForPlacement(BlockPlaceContext context) {
+        return defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
     }
 
     @Override
@@ -67,8 +58,7 @@ public final class HeroStandBlock extends BaseEntityBlock {
     @Override
     public InteractionResult use(BlockState state, Level level, BlockPos pos, Player player,
                                  InteractionHand hand, BlockHitResult hit) {
-        BlockEntity raw = level.getBlockEntity(pos);
-        if (!(raw instanceof HeroStandBlockEntity stand)) return InteractionResult.PASS;
+        if (!(level.getBlockEntity(pos) instanceof HeroStandBlockEntity stand)) return InteractionResult.PASS;
 
         ItemStack held = player.getItemInHand(hand);
         if (!held.isEmpty()) {
@@ -113,7 +103,7 @@ public final class HeroStandBlock extends BaseEntityBlock {
     @Override
     public void onRemove(BlockState oldState, Level level, BlockPos pos, BlockState newState, boolean moving) {
         if (!oldState.is(newState.getBlock()) && level.getBlockEntity(pos) instanceof HeroStandBlockEntity stand) {
-            Containers.dropContents(level, pos, stand.armor());
+            if (!level.isClientSide) Containers.dropContents(level, pos, stand.armor());
         }
         super.onRemove(oldState, level, pos, newState, moving);
     }
