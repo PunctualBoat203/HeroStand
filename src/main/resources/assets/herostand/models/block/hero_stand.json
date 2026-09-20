@@ -9,9 +9,9 @@
     {"from":[2,0,2],"to":[14,2,14],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
     {"from":[5,2,6],"to":[8,14,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
     {"from":[8,2,6],"to":[11,14,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
-    {"from":[5,14,6],"to":[11,26,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
-    {"from":[1,14,6],"to":[5,26,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
-    {"from":[11,14,6],"to":[15,26,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
-    {"from":[4,26,5],"to":[12,34,11],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}}
+    {"from":[5,14,6],"to":[11,24,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
+    {"from":[1,14,6],"to":[5,24,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
+    {"from":[11,14,6],"to":[15,24,10],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}},
+    {"from":[4,24,5],"to":[12,32,11],"faces":{"down":{"texture":"#body"},"up":{"texture":"#body"},"north":{"texture":"#body"},"south":{"texture":"#body"},"west":{"texture":"#body"},"east":{"texture":"#body"}}}
   ]
 }
