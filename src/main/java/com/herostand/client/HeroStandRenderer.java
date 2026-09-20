@@ -1,13 +1,11 @@
 package com.herostand.client;
 
-import com.herostand.world.HeroStandBlock;
 import com.herostand.world.HeroStandBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
-import net.minecraft.core.Direction;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.level.Level;
@@ -41,23 +39,21 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         renderContext.setItemSlot(EquipmentSlot.LEGS, stand.getArmor(HeroStandBlockEntity.LEGS));
         renderContext.setItemSlot(EquipmentSlot.FEET, stand.getArmor(HeroStandBlockEntity.FEET));
 
-        Direction facing = stand.getBlockState().getValue(HeroStandBlock.FACING);
-        float yaw = switch (facing) {
-            case NORTH -> 0.0F;
-            case EAST -> 90.0F;
-            case SOUTH -> 180.0F;
-            case WEST -> 270.0F;
-            default -> 0.0F;
-        };
-        renderContext.setYRot(yaw);
-        renderContext.yRotO = yaw;
-        renderContext.setYHeadRot(yaw);
-        renderContext.yHeadRotO = yaw;
+        // Keep the synthetic render entity at one fixed orientation. Rotate the PoseStack instead.
+        // This avoids EntityRenderDispatcher interpolating several independent yaw fields and
+        // eliminates the visible oscillation/jitter seen with modded suit renderers.
+        renderContext.setYRot(0.0F);
+        renderContext.yRotO = 0.0F;
+        renderContext.setYHeadRot(0.0F);
+        renderContext.yHeadRotO = 0.0F;
+
+        float rotation = stand.getBlockState().getValue(com.herostand.world.HeroStandBlock.FACING).toYRot();
 
         poseStack.pushPose();
         poseStack.translate(0.5D, 0.125D, 0.5D);
+        poseStack.mulPose(com.mojang.math.Axis.YP.rotationDegrees(-rotation));
         Minecraft.getInstance().getEntityRenderDispatcher().render(
-                renderContext, 0.0D, 0.0D, 0.0D, yaw, partialTick, poseStack, buffers, packedLight);
+                renderContext, 0.0D, 0.0D, 0.0D, 0.0F, partialTick, poseStack, buffers, packedLight);
         poseStack.popPose();
     }
 
