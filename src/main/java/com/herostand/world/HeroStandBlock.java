@@ -30,7 +30,7 @@ public final class HeroStandBlock extends BaseEntityBlock {
     public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
     private static final VoxelShape SHAPE = Shapes.or(
             box(2, 0, 2, 14, 2, 14),
-            box(6, 2, 6, 10, 16, 10));
+            box(4, 2, 4, 12, 16, 12));
 
     public HeroStandBlock(Properties properties) {
         super(properties);
@@ -56,7 +56,7 @@ public final class HeroStandBlock extends BaseEntityBlock {
     @Nullable
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
-        return defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
+        return defaultBlockState().setValue(FACING, context.getHorizontalDirection());
     }
 
     @Override
@@ -68,9 +68,7 @@ public final class HeroStandBlock extends BaseEntityBlock {
     public InteractionResult use(BlockState state, Level level, BlockPos pos, Player player,
                                  InteractionHand hand, BlockHitResult hit) {
         BlockEntity raw = level.getBlockEntity(pos);
-        if (!(raw instanceof HeroStandBlockEntity stand)) {
-            return InteractionResult.PASS;
-        }
+        if (!(raw instanceof HeroStandBlockEntity stand)) return InteractionResult.PASS;
 
         ItemStack held = player.getItemInHand(hand);
         if (!held.isEmpty()) {
@@ -78,9 +76,7 @@ public final class HeroStandBlock extends BaseEntityBlock {
             if (slot >= 0 && stand.isEmpty(slot)) {
                 if (!level.isClientSide) {
                     stand.setArmor(slot, held.copyWithCount(1));
-                    if (!player.getAbilities().instabuild) {
-                        held.shrink(1);
-                    }
+                    if (!player.getAbilities().instabuild) held.shrink(1);
                 }
                 return InteractionResult.sidedSuccess(level.isClientSide);
             }
@@ -89,22 +85,17 @@ public final class HeroStandBlock extends BaseEntityBlock {
             if (slot >= 0) {
                 if (!level.isClientSide) {
                     ItemStack removed = stand.removeArmor(slot);
-                    if (!player.addItem(removed)) {
-                        player.drop(removed, false);
-                    }
+                    if (!player.addItem(removed)) player.drop(removed, false);
                 }
                 return InteractionResult.sidedSuccess(level.isClientSide);
             }
         }
-
         return InteractionResult.PASS;
     }
 
     private static int pickRemovalSlot(HeroStandBlockEntity stand) {
         for (int slot = HeroStandBlockEntity.HEAD; slot < HeroStandBlockEntity.SLOT_COUNT; slot++) {
-            if (!stand.isEmpty(slot)) {
-                return slot;
-            }
+            if (!stand.isEmpty(slot)) return slot;
         }
         return -1;
     }
