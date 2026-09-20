@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "herostand:block/hero_stand" },
+    "facing=east": { "model": "herostand:block/hero_stand", "y": 90 },
+    "facing=south": { "model": "herostand:block/hero_stand", "y": 180 },
+    "facing=west": { "model": "herostand:block/hero_stand", "y": 270 }
+  }
+}
