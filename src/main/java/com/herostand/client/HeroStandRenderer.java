@@ -13,38 +13,36 @@ import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.level.Level;
 
 public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlockEntity> {
+    private ArmorStand renderContext;
+
     public HeroStandRenderer(BlockEntityRendererProvider.Context context) {}
 
     @Override
     public void render(HeroStandBlockEntity stand, float partialTick, PoseStack poseStack,
                        MultiBufferSource buffers, int packedLight, int packedOverlay) {
-        Level level = stand.getLevel();
-        if (level == null || Minecraft.getInstance().player == null) {
-            return;
+        Level level=stand.getLevel();
+        if (level==null || Minecraft.getInstance().player==null) return;
+
+        boolean hasArmor=false;
+        for(int i=0;i<HeroStandBlockEntity.SLOT_COUNT;i++) {
+            if(!stand.isEmpty(i)) { hasArmor=true; break; }
+        }
+        if(!hasArmor) return;
+
+        if(renderContext==null || renderContext.level()!=level) {
+            renderContext=new ArmorStand(level,0.0D,0.0D,0.0D);
+            renderContext.setInvisible(true);
+            renderContext.setNoBasePlate(true);
+            renderContext.setShowArms(true);
         }
 
-        boolean hasArmor = false;
-        for (int i = 0; i < HeroStandBlockEntity.SLOT_COUNT; i++) {
-            if (!stand.isEmpty(i)) {
-                hasArmor = true;
-                break;
-            }
-        }
-        if (!hasArmor) {
-            return;
-        }
+        renderContext.setItemSlot(EquipmentSlot.HEAD,stand.getArmor(HeroStandBlockEntity.HEAD));
+        renderContext.setItemSlot(EquipmentSlot.CHEST,stand.getArmor(HeroStandBlockEntity.CHEST));
+        renderContext.setItemSlot(EquipmentSlot.LEGS,stand.getArmor(HeroStandBlockEntity.LEGS));
+        renderContext.setItemSlot(EquipmentSlot.FEET,stand.getArmor(HeroStandBlockEntity.FEET));
 
-        ArmorStand renderContext = new ArmorStand(level, 0.0D, 0.0D, 0.0D);
-        renderContext.setInvisible(true);
-        renderContext.setNoBasePlate(true);
-        renderContext.setShowArms(true);
-        renderContext.setItemSlot(EquipmentSlot.HEAD, stand.getArmor(HeroStandBlockEntity.HEAD));
-        renderContext.setItemSlot(EquipmentSlot.CHEST, stand.getArmor(HeroStandBlockEntity.CHEST));
-        renderContext.setItemSlot(EquipmentSlot.LEGS, stand.getArmor(HeroStandBlockEntity.LEGS));
-        renderContext.setItemSlot(EquipmentSlot.FEET, stand.getArmor(HeroStandBlockEntity.FEET));
-
-        Direction facing = stand.getBlockState().getValue(HeroStandBlock.FACING);
-        float yaw = switch (facing) {
+        Direction facing=stand.getBlockState().getValue(HeroStandBlock.FACING);
+        float yaw=switch(facing) {
             case SOUTH -> 0.0F;
             case WEST -> 90.0F;
             case NORTH -> 180.0F;
@@ -52,17 +50,14 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
             default -> 0.0F;
         };
         renderContext.setYRot(yaw);
-        renderContext.yRotO = yaw;
+        renderContext.yRotO=yaw;
 
         poseStack.pushPose();
-        poseStack.translate(0.5D, 0.0D, 0.5D);
+        poseStack.translate(0.5D,0.0D,0.5D);
         Minecraft.getInstance().getEntityRenderDispatcher().render(
-                renderContext, 0.0D, 0.0D, 0.0D, yaw, partialTick, poseStack, buffers, packedLight);
+                renderContext,0.0D,0.0D,0.0D,yaw,partialTick,poseStack,buffers,packedLight);
         poseStack.popPose();
     }
 
-    @Override
-    public int getViewDistance() {
-        return 48;
-    }
+    @Override public int getViewDistance() { return 48; }
 }
