@@ -3,14 +3,12 @@ package com.herostand.world;
 import com.herostand.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Containers;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.ArmorItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
@@ -23,10 +21,16 @@ import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 
 public final class HeroStandBlock extends BaseEntityBlock {
     public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
+    private static final VoxelShape SHAPE = Shapes.or(
+            box(2, 0, 2, 14, 2, 14),
+            box(6, 2, 6, 10, 16, 10));
 
     public HeroStandBlock(Properties properties) {
         super(properties);
@@ -36,6 +40,11 @@ public final class HeroStandBlock extends BaseEntityBlock {
     @Override
     public RenderShape getRenderShape(BlockState state) {
         return RenderShape.MODEL;
+    }
+
+    @Override
+    public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+        return SHAPE;
     }
 
     @Nullable
@@ -64,21 +73,18 @@ public final class HeroStandBlock extends BaseEntityBlock {
         }
 
         ItemStack held = player.getItemInHand(hand);
-        if (held.getItem() instanceof ArmorItem armorItem) {
-            int slot = slotIndex(armorItem.getEquipmentSlot());
+        if (!held.isEmpty()) {
+            int slot = slotIndex(Mob.getEquipmentSlotForItem(held));
             if (slot >= 0 && stand.isEmpty(slot)) {
                 if (!level.isClientSide) {
-                    ItemStack display = held.copyWithCount(1);
-                    stand.setArmor(slot, display);
+                    stand.setArmor(slot, held.copyWithCount(1));
                     if (!player.getAbilities().instabuild) {
                         held.shrink(1);
                     }
                 }
                 return InteractionResult.sidedSuccess(level.isClientSide);
             }
-        }
-
-        if (held.isEmpty()) {
+        } else {
             int slot = pickRemovalSlot(stand);
             if (slot >= 0) {
                 if (!level.isClientSide) {
