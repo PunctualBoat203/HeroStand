@@ -1,5 +1,6 @@
 package com.herostand.client;
 
+import com.herostand.world.HeroStandBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -15,8 +16,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Optional Palladium integration. This class only touches Palladium through reflection so
- * HeroStand remains fully usable when Palladium is not installed.
+ * Optional Palladium integration. All Palladium access is reflective so HeroStand still loads
+ * normally when Palladium is absent.
  */
 final class PalladiumRenderBridge {
     private static final EquipmentSlot[] ARMOR_SLOTS = {
@@ -33,6 +34,11 @@ final class PalladiumRenderBridge {
     private final Method forArmorInSlot;
     private final Method renderLayer;
 
+    /**
+     * Identity cache is intentional: Minecraft Items are registry singletons. Once a static
+     * display suit resolves its ArmorRendererData/layers, avoid repeating reflective lookups
+     * every frame. Cleared when the render world/context changes.
+     */
     private final Map<Item, RendererCache> rendererCache = new IdentityHashMap<>();
 
     PalladiumRenderBridge() {
@@ -84,18 +90,13 @@ final class PalladiumRenderBridge {
         this.renderLayer = layerRender;
     }
 
-    /**
-     * The fast path is intentionally conservative: every equipped item must be a Palladium
-     * ArmorWithRenderer item with a loaded ArmorRendererData object. Mixed/unknown armor
-     * falls back to Minecraft's normal EntityRenderDispatcher path.
-     */
-    boolean canUseFastPath(ArmorStand entity) {
+    boolean canUseFastPath(HeroStandBlockEntity stand) {
         if (!installed || !healthy) return false;
 
         boolean foundArmor = false;
         try {
-            for (EquipmentSlot slot : ARMOR_SLOTS) {
-                ItemStack stack = entity.getItemBySlot(slot);
+            for (int i = 0; i < HeroStandBlockEntity.SLOT_COUNT; i++) {
+                ItemStack stack = stand.getArmor(i);
                 if (stack.isEmpty()) continue;
                 foundArmor = true;
 
@@ -105,16 +106,14 @@ final class PalladiumRenderBridge {
             }
             return foundArmor;
         } catch (Throwable ignored) {
-            healthy = false;
-            rendererCache.clear();
+            disableFastPath();
             return false;
         }
     }
 
     /**
-     * Renders only the pack layers attached to each Palladium ArmorRendererData.
-     * Ability-provided/player-only global render layers are deliberately skipped for a static
-     * display stand.
+     * Renders only ArmorRendererData pack layers. Ability/player-global layers are intentionally
+     * omitted because a HeroStand is a static display, not a powered living wearer.
      */
     void renderPackLayers(ArmorStand entity, EntityModel<?> parentModel, PoseStack poseStack,
                           MultiBufferSource buffers, int packedLight, float partialTick) {
@@ -137,23 +136,35 @@ final class PalladiumRenderBridge {
                 }
             }
         } catch (Throwable ignored) {
-            healthy = false;
-            rendererCache.clear();
+            disableFastPath();
         }
     }
 
-    private RendererCache rendererFor(Item item) throws Exception {
-        Object renderer = getCachedArmorRenderer.invoke(item);
-        if (renderer == null || !armorRendererDataClass.isInstance(renderer)) return null;
+    void resetSessionCache() {
+        rendererCache.clear();
+    }
 
-        RendererCache cached = rendererCache.get(item);
-        if (cached != null && cached.renderer == renderer) return cached;
+    private RendererCache rendererFor(Item item) throws Exception {
+        if (rendererCache.containsKey(item)) {
+            return rendererCache.get(item);
+        }
+
+        Object renderer = getCachedArmorRenderer.invoke(item);
+        if (renderer == null || !armorRendererDataClass.isInstance(renderer)) {
+            rendererCache.put(item, null);
+            return null;
+        }
 
         Object rawLayers = getRenderLayers.invoke(renderer);
         List<?> layers = rawLayers instanceof List<?> list ? List.copyOf(list) : List.of();
         RendererCache next = new RendererCache(renderer, layers);
         rendererCache.put(item, next);
         return next;
+    }
+
+    private void disableFastPath() {
+        healthy = false;
+        rendererCache.clear();
     }
 
     private record RendererCache(Object renderer, List<?> layers) {}
