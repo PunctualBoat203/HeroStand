@@ -1,12 +1,34 @@
 {
-  "parent": "minecraft:block/cube",
+  "ambientocclusion": false,
   "textures": {
-    "down": "minecraft:block/iron_block",
-    "up": "minecraft:block/polished_diorite",
-    "north": "minecraft:block/polished_diorite",
-    "south": "minecraft:block/polished_diorite",
-    "west": "minecraft:block/polished_diorite",
-    "east": "minecraft:block/polished_diorite",
+    "stone": "minecraft:block/polished_diorite",
+    "iron": "minecraft:block/iron_block",
     "particle": "minecraft:block/polished_diorite"
-  }
+  },
+  "elements": [
+    { "from": [2,0,2], "to": [14,2,14], "faces": {
+      "down":{"texture":"#iron"},"up":{"texture":"#iron"},"north":{"texture":"#iron"},"south":{"texture":"#iron"},"west":{"texture":"#iron"},"east":{"texture":"#iron"}
+    }},
+    { "from": [7,2,7], "to": [9,8,9], "faces": {
+      "down":{"texture":"#iron"},"up":{"texture":"#iron"},"north":{"texture":"#iron"},"south":{"texture":"#iron"},"west":{"texture":"#iron"},"east":{"texture":"#iron"}
+    }},
+    { "from": [5,8,6], "to": [11,20,10], "faces": {
+      "down":{"texture":"#stone"},"up":{"texture":"#stone"},"north":{"texture":"#stone"},"south":{"texture":"#stone"},"west":{"texture":"#stone"},"east":{"texture":"#stone"}
+    }},
+    { "from": [1,8,6], "to": [5,19,10], "faces": {
+      "down":{"texture":"#stone"},"up":{"texture":"#stone"},"north":{"texture":"#stone"},"south":{"texture":"#stone"},"west":{"texture":"#stone"},"east":{"texture":"#stone"}
+    }},
+    { "from": [11,8,6], "to": [15,19,10], "faces": {
+      "down":{"texture":"#stone"},"up":{"texture":"#stone"},"north":{"texture":"#stone"},"south":{"texture":"#stone"},"west":{"texture":"#stone"},"east":{"texture":"#stone"}
+    }},
+    { "from": [5,20,5], "to": [11,28,11], "faces": {
+      "down":{"texture":"#stone"},"up":{"texture":"#stone"},"north":{"texture":"#stone"},"south":{"texture":"#stone"},"west":{"texture":"#stone"},"east":{"texture":"#stone"}
+    }},
+    { "from": [5,2,6], "to": [8,8,10], "faces": {
+      "down":{"texture":"#stone"},"up":{"texture":"#stone"},"north":{"texture":"#stone"},"south":{"texture":"#stone"},"west":{"texture":"#stone"},"east":{"texture":"#stone"}
+    }},
+    { "from": [8,2,6], "to": [11,8,10], "faces": {
+      "down":{"texture":"#stone"},"up":{"texture":"#stone"},"north":{"texture":"#stone"},"south":{"texture":"#stone"},"west":{"texture":"#stone"},"east":{"texture":"#stone"}
+    }}
+  ]
 }
