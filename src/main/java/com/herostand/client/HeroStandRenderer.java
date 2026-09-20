@@ -1,5 +1,6 @@
 package com.herostand.client;
 
+import com.herostand.config.HeroStandClientConfig;
 import com.herostand.world.HeroStandBlock;
 import com.herostand.world.HeroStandBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -28,9 +29,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlockEntity> {
-    private static final int VIEW_DISTANCE = 21;
-    private static final double VIEW_DISTANCE_SQR = VIEW_DISTANCE * VIEW_DISTANCE;
-
     private static final long VISIBLE_REFRESH_TICKS = 8L;
     private static final long OCCLUDED_REFRESH_TICKS = 12L;
     private static final long MOVING_REFRESH_TICKS = 4L;
@@ -209,8 +207,10 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     public boolean shouldRender(HeroStandBlockEntity stand, Vec3 cameraPos) {
         if (!hasArmor(stand)) return false;
 
+        int viewDistance = HeroStandClientConfig.renderDistance();
+        double viewDistanceSqr = (double) viewDistance * viewDistance;
         Vec3 center = Vec3.atCenterOf(stand.getBlockPos());
-        if (cameraPos.distanceToSqr(center) > VIEW_DISTANCE_SQR) return false;
+        if (cameraPos.distanceToSqr(center) > viewDistanceSqr) return false;
 
         Level level = stand.getLevel();
         if (level == null || Minecraft.getInstance().player == null) return false;
@@ -294,7 +294,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
 
     @Override
     public int getViewDistance() {
-        return VIEW_DISTANCE;
+        return HeroStandClientConfig.renderDistance();
     }
 
     private record OcclusionEntry(long gameTime, Vec3 cameraPos, boolean visible) {}
