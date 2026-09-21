@@ -8,11 +8,15 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.0**
+Current test build: **0.2.1**
 
 ## IMPORTANT — current development line
 
 Active renderer rebuild branch:
+
+`rebuild/0.2.1-cache-diagnostics`
+
+0.2.0 renderer reset branch:
 
 `rebuild/0.2.0-native-snapshot`
 
@@ -26,7 +30,8 @@ Known reference points:
 - **0.1.17**: Mark One visual issue confirmed fixed, but mixed-suit FPS still poor.
 - **0.1.18**: roughly 49 FPS / 63% GPU / 476 MiB/s allocation in the mixed-suit wall.
 - **0.1.19**: no meaningful improvement and may have been worse.
-- **0.2.0**: clean renderer reset described below.
+- **0.2.0**: clean renderer reset; user test was a very stable **49–50 FPS**, about **79% GPU**, and about **511 MiB/s allocation** at the mixed-suit wall.
+- **0.2.1**: cache-hot-path correction + F3 diagnostics to measure whether complete suit snapshots are actually being used.
 
 Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
 
@@ -144,6 +149,60 @@ The hot path for an already-cached suit is only:
 
 It does not redo Palladium renderer/model safety inspection on every cache hit.
 
+## 0.2.1 cache-hot-path correction and diagnostics
+
+The 0.2.0 user test was visually stable but did not materially improve throughput:
+- **49–50 FPS**
+- approximately **79% GPU**
+- approximately **511 MiB/s allocation**
+- FPS was notably stable, but still far below the target when looking directly at the mixed-suit wall.
+
+That result strongly suggests most visible suits were still reaching Palladium's live renderer instead of the complete static snapshot path.
+
+Two concrete 0.2.0 inefficiencies were found:
+
+1. **Snapshot lookup happened too late.**  
+   HeroStand first identified the Palladium suit, updated the reusable SuitStand equipment, and performed renderer/context work before checking for an already-built snapshot.
+
+2. **Known-unsnapshotable suits were safety-inspected every frame.**  
+   The cache already remembered capture failures for 30 seconds, but a suit rejected by the higher-level dynamic-model/layer safety check was never added to that cooldown. Dynamic/unsafe suits therefore repeated reflective model/layer inspection every visible frame.
+
+0.2.1 changes:
+- Compute the compact suit/light snapshot key directly from the HeroStand block entity's four stored ItemStacks.
+- Try the snapshot cache **before Palladium detection, reflection, SuitStand preparation, or equipment copying**.
+- A cache hit now goes directly from HeroStand state -> snapshot lookup -> GPU draw.
+- If a suit fails the Palladium snapshot-safety check, remember that suit identity as uncacheable for 30 seconds instead of reflectively re-checking it every frame.
+- Keep native Palladium live rendering as the correctness fallback.
+
+### F3 diagnostic line
+
+0.2.1 adds a HeroStand line to the normal F3 debug screen.
+
+It reports cumulative renderer behavior for the current renderer session:
+- snapshot percentage;
+- snapshot cache hits;
+- snapshots built and drawn;
+- Palladium live renders;
+- blocked/known-dynamic renders;
+- safety rejects;
+- capture rejects;
+- build-budget deferrals;
+- current snapshot cache entry count.
+
+Example shape:
+
+`HeroStand 0.2.1: snap 85.0% (... hit/... built) live=... blocked=... safetyReject=... captureReject=... defer=... cache=...`
+
+This line is intentionally diagnostic. The next mixed-wall screenshot should include it.
+
+How to interpret it:
+- **High snapshot % (ideally most static suits)** but FPS remains ~50: the problem is snapshot replay/draw submission/GPU cost, not Palladium model construction.
+- **Low snapshot % + high safetyReject/blocked**: the static/dynamic classifier is too conservative for the user's suit pack.
+- **Low snapshot % + high captureReject**: RenderTypes/translucency are preventing snapshots.
+- **Low snapshot % + high live but low rejects**: suit classification/context routing is missing expected Palladium suits.
+- **High defer during initial warmup only** is normal because builds are intentionally throttled.
+- Allocation should drop materially once snapshot hits dominate; if it does not, inspect work performed outside the suit renderer.
+
 ## Distance and wall occlusion
 
 0.2.0 intentionally keeps the known 0.1.9 culling behavior separate from the visual renderer.
@@ -174,7 +233,7 @@ In particular, the old manual `PalladiumRenderBridge` was removed from the 0.2.0
 
 Do not re-add the old GPU-vendor router, partial base-only VBO cache, fast manual model emitter, or layered renderer experiments unless a specific measured reason justifies doing so.
 
-## 0.2.0 validation priorities
+## 0.2.1 validation priorities
 
 Test in this order:
 
@@ -191,10 +250,11 @@ Test in this order:
    - transparent/glass pieces.
 
 3. **Mixed-suit performance wall**
-   - use the same viewpoint used for the 0.1.17–0.1.19 screenshots;
+   - use the same viewpoint used for the 0.1.17–0.2.0 screenshots;
    - wait several seconds for snapshot warm-up;
-   - record FPS, GPU %, and allocation rate;
-   - repeated identical suits should share snapshots.
+   - record FPS, GPU %, allocation rate, **and the HeroStand F3 diagnostic line**;
+   - repeated identical suits should share snapshots;
+   - do not judge the next architecture until the diagnostic line shows whether snapshot coverage is high or low.
 
 4. **Dynamic effects**
    - thrusters/lightning/animated suit layers must remain animated and live.
@@ -235,7 +295,12 @@ Before handing over a JAR:
 4. validate the artifact/JAR contents;
 5. do not silently substitute a stale `main` build.
 
-0.2.0 Actions reference:
+0.2.1 Actions reference:
+- branch: `rebuild/0.2.1-cache-diagnostics`
+- successful build: **run #84**
+- build commit: `0bb878d8b5b4df4c0fbd17275f258f9f042dcec8`
+
+0.2.0 reference:
 - branch: `rebuild/0.2.0-native-snapshot`
 - successful build: **run #82**
 - build commit: `845c0a2f30b2b1e2e01086ccdda60d79d7a82831`
