@@ -22,6 +22,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -80,15 +81,17 @@ final class PalladiumRenderBridge {
     private final RendererCache[] lastSlotRenderers = new RendererCache[ARMOR_SLOTS.length];
 
     /**
-     * Direct Palladium armor cache. It intentionally lives for one render frame only: model/texture
-     * conditions are still re-evaluated every frame, but not once per identical HeroStand.
+     * Direct Palladium armor visual state is static for a display stand. Cache model/texture
+     * resolution across frames (with a short refresh window for NBT/world-driven variants) so a
+     * wall of different suits does not rebuild every armor piece every frame.
      */
-    private int directFrameBits = Integer.MIN_VALUE;
-    private final Item[] directItems = new Item[ARMOR_SLOTS.length];
-    private final int[] directDamage = new int[ARMOR_SLOTS.length];
-    private final int[] directTagHash = new int[ARMOR_SLOTS.length];
-    private final DirectArmorVisual[] directVisuals = new DirectArmorVisual[ARMOR_SLOTS.length];
+    private static final long DIRECT_VISUAL_CACHE_TICKS = 40L;
+    private static final long DIRECT_VISUAL_CACHE_SPREAD_TICKS = 20L;
+    private static final int MAX_DIRECT_VISUAL_VARIANTS = 1024;
+
+    private final Map<Item, List<DirectArmorVariant>> directArmorCache = new IdentityHashMap<>();
     private final DirectArmorVisual[] directScratch = new DirectArmorVisual[ARMOR_SLOTS.length];
+    private int directArmorVariantCount;
 
     PalladiumRenderBridge() {
         boolean present = ModList.get().isLoaded("palladium");
@@ -241,7 +244,6 @@ final class PalladiumRenderBridge {
 
         try {
             ensureArmorContexts(entity);
-            beginDirectFrame(partialTick);
 
             // Preflight every piece before emitting vertices. If any piece requires the old path,
             // return false so the caller can render the complete armor set through HumanoidArmorLayer.
@@ -267,9 +269,8 @@ final class PalladiumRenderBridge {
                 if (cache == null) return false;
 
                 DirectArmorVisual visual = directVisualFor(
-                        i, stack, entity, context, cache,
-                        slot == EquipmentSlot.LEGS ? innerFallback : outerFallback,
-                        parentModel
+                        stack, slot, entity, context, cache,
+                        slot == EquipmentSlot.LEGS ? innerFallback : outerFallback
                 );
 
                 if (visual == null) return false;
@@ -282,7 +283,10 @@ final class PalladiumRenderBridge {
 
                 EquipmentSlot slot = ARMOR_SLOTS[i];
                 ItemStack stack = entity.getItemBySlot(slot);
-                renderDirectPiece(visual, stack, slot, poseStack, buffers, packedLight);
+                renderDirectPiece(
+                        visual, stack, slot, parentModel,
+                        poseStack, buffers, packedLight
+                );
             }
 
             return true;
@@ -363,32 +367,55 @@ final class PalladiumRenderBridge {
         }
     }
 
-    private void beginDirectFrame(float partialTick) {
-        int bits = Float.floatToIntBits(partialTick);
-        if (bits == directFrameBits) return;
-
-        directFrameBits = bits;
-        clearDirectVisualsOnly();
-    }
-
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private DirectArmorVisual directVisualFor(int slotIndex,
-                                               ItemStack stack,
+    private DirectArmorVisual directVisualFor(ItemStack stack,
+                                               EquipmentSlot slot,
                                                ArmorStand entity,
                                                Object context,
                                                RendererCache cache,
-                                               HumanoidModel<?> fallbackModel,
-                                               HumanoidModel<?> parentModel) throws Exception {
+                                               HumanoidModel<?> fallbackModel) throws Exception {
         Item item = stack.getItem();
-        int damage = stack.getDamageValue();
-        int tagHash = stack.hasTag() ? stack.getTag().hashCode() : 0;
+        long gameTime = entity.level().getGameTime();
 
-        if (directItems[slotIndex] == item
-                && directDamage[slotIndex] == damage
-                && directTagHash[slotIndex] == tagHash
-                && directVisuals[slotIndex] != null) {
-            return directVisuals[slotIndex];
+        List<DirectArmorVariant> variants =
+                directArmorCache.computeIfAbsent(item, ignored -> new ArrayList<>(2));
+
+        for (DirectArmorVariant variant : variants) {
+            if (variant.slot == slot && ItemStack.isSameItemSameTags(variant.stack, stack)) {
+                if (gameTime >= variant.expiresAt) {
+                    variant.visual = resolveDirectArmorVisual(
+                            stack, entity, context, cache, fallbackModel
+                    );
+                    variant.expiresAt = gameTime + directRefreshDelay(stack, slot);
+                }
+                return variant.visual;
+            }
         }
+
+        DirectArmorVariant next = new DirectArmorVariant(
+                slot,
+                stack.copy(),
+                resolveDirectArmorVisual(stack, entity, context, cache, fallbackModel),
+                gameTime + directRefreshDelay(stack, slot)
+        );
+        variants.add(next);
+        directArmorVariantCount++;
+
+        if (directArmorVariantCount > MAX_DIRECT_VISUAL_VARIANTS) {
+            directArmorCache.clear();
+            directArmorVariantCount = 0;
+        }
+
+        return next.visual;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private DirectArmorVisual resolveDirectArmorVisual(ItemStack stack,
+                                                        ArmorStand entity,
+                                                        Object context,
+                                                        RendererCache cache,
+                                                        HumanoidModel<?> fallbackModel) throws Exception {
+        Item item = stack.getItem();
 
         Object rawModel = getArmorModel.invoke(cache.renderer, entity, context);
         HumanoidModel model = rawModel instanceof HumanoidModel humanoid
@@ -409,26 +436,31 @@ final class PalladiumRenderBridge {
             overlayRenderType = (RenderType) getArmorTranslucent.invoke(null, overlay);
         }
 
-        // Parent pose is static/neutral for HeroStand. Do this once per item/slot per frame instead
-        // of once per stand through HumanoidArmorLayer.
-        ((HumanoidModel) parentModel).copyPropertiesTo(model);
+        return new DirectArmorVisual(model, renderType, overlayRenderType);
+    }
 
-        DirectArmorVisual visual = new DirectArmorVisual(model, renderType, overlayRenderType);
-        directItems[slotIndex] = item;
-        directDamage[slotIndex] = damage;
-        directTagHash[slotIndex] = tagHash;
-        directVisuals[slotIndex] = visual;
-        return visual;
+    private static long directRefreshDelay(ItemStack stack, EquipmentSlot slot) {
+        int hash = System.identityHashCode(stack.getItem());
+        hash = 31 * hash + stack.getDamageValue();
+        hash = 31 * hash + (stack.hasTag() ? stack.getTag().hashCode() : 0);
+        hash = 31 * hash + slot.ordinal();
+        return DIRECT_VISUAL_CACHE_TICKS
+                + (Integer.toUnsignedLong(hash) % DIRECT_VISUAL_CACHE_SPREAD_TICKS);
     }
 
     @SuppressWarnings("rawtypes")
     private static void renderDirectPiece(DirectArmorVisual visual,
                                           ItemStack stack,
                                           EquipmentSlot slot,
+                                          HumanoidModel<?> parentModel,
                                           PoseStack poseStack,
                                           MultiBufferSource buffers,
                                           int packedLight) {
         HumanoidModel model = visual.model;
+
+        // Palladium models are shared globally. Reapply the HeroStand's static parent pivots before
+        // every draw so another entity render cannot leave this cached model in a different pose.
+        ((HumanoidModel) parentModel).copyPropertiesTo(model);
         setPartVisibility(model, slot);
 
         boolean foil = stack.hasFoil();
@@ -544,16 +576,9 @@ final class PalladiumRenderBridge {
     }
 
     private void clearDirectCache() {
-        directFrameBits = Integer.MIN_VALUE;
-        clearDirectVisualsOnly();
-    }
-
-    private void clearDirectVisualsOnly() {
+        directArmorCache.clear();
+        directArmorVariantCount = 0;
         for (int i = 0; i < ARMOR_SLOTS.length; i++) {
-            directItems[i] = null;
-            directDamage[i] = 0;
-            directTagHash[i] = 0;
-            directVisuals[i] = null;
             directScratch[i] = null;
         }
     }
@@ -568,6 +593,23 @@ final class PalladiumRenderBridge {
     }
 
     private record RendererCache(Object renderer, List<?> layers) {}
+
+    private static final class DirectArmorVariant {
+        final EquipmentSlot slot;
+        final ItemStack stack;
+        DirectArmorVisual visual;
+        long expiresAt;
+
+        DirectArmorVariant(EquipmentSlot slot,
+                           ItemStack stack,
+                           DirectArmorVisual visual,
+                           long expiresAt) {
+            this.slot = slot;
+            this.stack = stack;
+            this.visual = visual;
+            this.expiresAt = expiresAt;
+        }
+    }
 
     @SuppressWarnings("rawtypes")
     private record DirectArmorVisual(
