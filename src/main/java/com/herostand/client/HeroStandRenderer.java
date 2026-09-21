@@ -59,6 +59,16 @@ public final class HeroStandRenderer
     private static final Set<HeroStandRenderer> ACTIVE_RENDERERS =
             Collections.newSetFromMap(new WeakHashMap<>());
 
+    private static long statRenderCalls;
+    private static long statSnapshotHits;
+    private static long statSnapshotBuildDraws;
+    private static long statLivePalladium;
+    private static long statVanillaFallback;
+    private static long statSafetyRejects;
+    private static long statCaptureRejects;
+    private static long statBuildDeferred;
+    private static long statBlockedDynamic;
+
     private final PalladiumNativeBridge palladium =
             new PalladiumNativeBridge();
     private final StaticSuitSnapshotCache snapshots =
@@ -92,6 +102,8 @@ public final class HeroStandRenderer
             return;
         }
 
+        statRenderCalls++;
+
         if (renderLevel != level) {
             renderLevel = level;
             clearInstanceCaches();
@@ -109,50 +121,74 @@ public final class HeroStandRenderer
             poseStack.mulPose(
                     Axis.YP.rotationDegrees(-rotation));
 
+            long gameTime = level.getGameTime();
+
+            /*
+             * 0.2.1 true hot path: test the block entity's own four ItemStacks before touching
+             * Palladium reflection or mutating a reusable SuitStand render context.
+             */
+            if (snapshots.renderCached(
+                    stand,
+                    packedLight,
+                    gameTime,
+                    poseStack)) {
+                statSnapshotHits++;
+                return;
+            }
+
             if (palladium.isPalladiumSuit(stand)) {
                 ArmorStand suitContext =
                         palladium.prepareContext(stand, level);
 
                 if (suitContext != null) {
-                    long gameTime = level.getGameTime();
+                    if (snapshots.shouldAttemptBuild(stand, gameTime)) {
+                        if (palladium.isSnapshotSafe(suitContext)) {
+                            StaticSuitSnapshotCache.BuildResult result =
+                                    snapshots.renderOrBuild(
+                                            stand,
+                                            suitContext,
+                                            packedLight,
+                                            gameTime,
+                                            poseStack,
+                                            (localPose, captureSource) ->
+                                                    minecraft
+                                                            .getEntityRenderDispatcher()
+                                                            .render(
+                                                                    suitContext,
+                                                                    0.0D,
+                                                                    0.0D,
+                                                                    0.0D,
+                                                                    0.0F,
+                                                                    0.0F,
+                                                                    localPose,
+                                                                    captureSource,
+                                                                    packedLight
+                                                            )
+                                    );
 
-                    // Hot path: once a suit snapshot exists, do not run reflective Palladium
-                    // compatibility/model inspection again every frame.
-                    if (snapshots.renderCached(
-                            suitContext,
-                            packedLight,
-                            gameTime,
-                            poseStack)) {
-                        return;
-                    }
+                            if (result == StaticSuitSnapshotCache.BuildResult.DRAWN) {
+                                statSnapshotBuildDraws++;
+                                return;
+                            }
 
-                    if (palladium.isSnapshotSafe(suitContext)) {
-                        boolean snapshotDrawn =
-                                snapshots.renderOrBuild(
-                                        suitContext,
-                                        packedLight,
-                                        gameTime,
-                                        poseStack,
-                                        (localPose, captureSource) ->
-                                                minecraft
-                                                        .getEntityRenderDispatcher()
-                                                        .render(
-                                                                suitContext,
-                                                                0.0D,
-                                                                0.0D,
-                                                                0.0D,
-                                                                0.0F,
-                                                                0.0F,
-                                                                localPose,
-                                                                captureSource,
-                                                                packedLight
-                                                        )
-                                );
-
-                        if (snapshotDrawn) {
-                            return;
+                            if (result == StaticSuitSnapshotCache.BuildResult.REJECTED) {
+                                statCaptureRejects++;
+                            } else {
+                                statBuildDeferred++;
+                            }
+                        } else {
+                            /*
+                             * This was a major 0.2.0 waste: unsafe/dynamic suits were reflectively
+                             * re-inspected every frame even though they could not be snapshotted.
+                             */
+                            snapshots.markUncacheable(stand, gameTime);
+                            statSafetyRejects++;
                         }
+                    } else {
+                        statBlockedDynamic++;
                     }
+
+                    statLivePalladium++;
 
                     // Dynamic, truly translucent, unknown, or not-yet-cached:
                     // use Palladium's real SuitStandRenderer.
@@ -173,6 +209,8 @@ public final class HeroStandRenderer
 
             ArmorStand fallback =
                     prepareVanillaFallback(stand, level);
+
+            statVanillaFallback++;
 
             minecraft.getEntityRenderDispatcher().render(
                     fallback,
@@ -290,8 +328,46 @@ public final class HeroStandRenderer
         }
     }
 
+    static String debugLine() {
+        long snapshotDraws = statSnapshotHits + statSnapshotBuildDraws;
+        double hitPercent = statRenderCalls == 0L
+                ? 0.0D
+                : (snapshotDraws * 100.0D) / statRenderCalls;
+
+        int entries = 0;
+        synchronized (ACTIVE_RENDERERS) {
+            for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
+                entries += renderer.snapshots.size();
+            }
+        }
+
+        return String.format(
+                java.util.Locale.ROOT,
+                "HeroStand 0.2.1: snap %.1f%% (%d hit/%d built) live=%d blocked=%d safetyReject=%d captureReject=%d defer=%d cache=%d",
+                hitPercent,
+                statSnapshotHits,
+                statSnapshotBuildDraws,
+                statLivePalladium,
+                statBlockedDynamic,
+                statSafetyRejects,
+                statCaptureRejects,
+                statBuildDeferred,
+                entries
+        );
+    }
+
     static void clearAllCaches() {
         Runnable clear = () -> {
+            statRenderCalls = 0L;
+            statSnapshotHits = 0L;
+            statSnapshotBuildDraws = 0L;
+            statLivePalladium = 0L;
+            statVanillaFallback = 0L;
+            statSafetyRejects = 0L;
+            statCaptureRejects = 0L;
+            statBuildDeferred = 0L;
+            statBlockedDynamic = 0L;
+
             synchronized (ACTIVE_RENDERERS) {
                 for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
                     renderer.clearInstanceCaches();
