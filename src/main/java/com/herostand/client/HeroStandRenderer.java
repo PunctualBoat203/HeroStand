@@ -68,6 +68,12 @@ public final class HeroStandRenderer
     private static long statCaptureRejects;
     private static long statBuildDeferred;
     private static long statBlockedDynamic;
+    private static long statPackHits;
+    private static long statPackBuilds;
+    private static long statPackLive;
+    private static long statPackDynamic;
+    private static long statPackDeferred;
+    private static long statPackEmpty;
 
     private final PalladiumNativeBridge palladium =
             new PalladiumNativeBridge();
@@ -217,17 +223,38 @@ public final class HeroStandRenderer
                     }
 
                     /*
-                     * Always render Palladium pack/add-on layers live. This is the part of the
-                     * renderer where Palladium intentionally uses entityTranslucent, glow,
-                     * thrusters, lightning and third-party render-layer behavior.
+                     * 0.2.7: static Palladium pack layers cache their emitted vertices in CPU
+                     * arrays, then replay through Minecraft's normal MultiBufferSource. Dynamic
+                     * layers stay live, so transparency/glint/batching remain native.
                      */
-                    palladium.renderLivePackLayers(
-                            suitContext,
-                            poseStack,
-                            buffers,
-                            packedLight,
-                            partialTick
-                    );
+                    PalladiumNativeBridge.PackPassStats packStats =
+                            palladium.renderPackLayersOptimized(
+                                    suitContext,
+                                    poseStack,
+                                    buffers,
+                                    packedLight,
+                                    partialTick,
+                                    gameTime
+                            );
+
+                    if (!packStats.success()) {
+                        palladium.renderPackLayersLive(
+                                suitContext,
+                                poseStack,
+                                buffers,
+                                packedLight,
+                                partialTick
+                        );
+                        statPackLive++;
+                    } else {
+                        statPackHits += packStats.hits();
+                        statPackBuilds += packStats.builds();
+                        statPackLive += packStats.live();
+                        statPackDynamic += packStats.dynamic();
+                        statPackDeferred += packStats.deferred();
+                        statPackEmpty += packStats.empty();
+                    }
+
                     statLivePalladium++;
                     return;
                 }
@@ -350,39 +377,46 @@ public final class HeroStandRenderer
         synchronized (ACTIVE_RENDERERS) {
             for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
                 renderer.snapshots.tick(gameTime);
+                renderer.palladium.tickPackCache(gameTime);
             }
         }
     }
 
     static String debugLine() {
-        long snapshotDraws = statSnapshotHits + statSnapshotBuildDraws;
-        double hitPercent = statRenderCalls == 0L
+        long packTotal = statPackHits + statPackBuilds + statPackLive;
+        double packPercent = packTotal == 0L
                 ? 0.0D
-                : (snapshotDraws * 100.0D) / statRenderCalls;
+                : ((statPackHits + statPackBuilds) * 100.0D) / packTotal;
 
-        int entries = 0;
-        String reject = "none";
+        int packEntries = 0;
+        long packBytes = 0L;
+        String reason = "none";
+
         synchronized (ACTIVE_RENDERERS) {
             for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
-                entries += renderer.snapshots.size();
-                String candidate = renderer.snapshots.lastRejectReason();
+                packEntries += renderer.palladium.packCacheSize();
+                packBytes += renderer.palladium.packCacheBytes();
+
+                String candidate = renderer.palladium.packCacheReason();
                 if (!"none".equals(candidate)) {
-                    reject = candidate;
+                    reason = candidate;
                 }
             }
         }
 
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.6 armor=%.1f%% hit=%d build=%d layers=%d unsafe=%d cap=%d cache=%d why=%s",
-                hitPercent,
-                statSnapshotHits,
-                statSnapshotBuildDraws,
-                statLivePalladium,
-                statSafetyRejects,
-                statCaptureRejects,
-                entries,
-                reject
+                "HeroStand 0.2.7 pack=%.1f%% hit=%d build=%d live=%d dyn=%d defer=%d empty=%d cache=%d %.1fMiB why=%s",
+                packPercent,
+                statPackHits,
+                statPackBuilds,
+                statPackLive,
+                statPackDynamic,
+                statPackDeferred,
+                statPackEmpty,
+                packEntries,
+                packBytes / (1024.0D * 1024.0D),
+                reason
         );
     }
 
@@ -397,6 +431,12 @@ public final class HeroStandRenderer
             statCaptureRejects = 0L;
             statBuildDeferred = 0L;
             statBlockedDynamic = 0L;
+            statPackHits = 0L;
+            statPackBuilds = 0L;
+            statPackLive = 0L;
+            statPackDynamic = 0L;
+            statPackDeferred = 0L;
+            statPackEmpty = 0L;
 
             synchronized (ACTIVE_RENDERERS) {
                 for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
