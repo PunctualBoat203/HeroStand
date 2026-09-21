@@ -1,0 +1,23 @@
+name: Fetch Satsu 3.5.3 for analysis
+
+on:
+  push:
+    branches: [ "analysis/satsu-3.5.3" ]
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch exact CurseMaven artifact
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 3             "https://cursemaven.com/curse/maven/satsu-iron-man-addon-1189482/8858946/satsu-iron-man-addon-1189482-8858946.jar"             -o Satsu_iron_man_addon-3.5.3.jar
+          sha1sum Satsu_iron_man_addon-3.5.3.jar
+          unzip -l Satsu_iron_man_addon-3.5.3.jar | head -200
+      - uses: actions/upload-artifact@v4
+        with:
+          name: satsu-3.5.3-analysis
+          path: Satsu_iron_man_addon-3.5.3.jar
+          if-no-files-found: error
