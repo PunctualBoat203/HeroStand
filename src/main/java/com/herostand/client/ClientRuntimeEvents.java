@@ -4,6 +4,7 @@ import com.herostand.HeroStand;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
+import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -25,6 +26,13 @@ public final class ClientRuntimeEvents {
         var level = Minecraft.getInstance().level;
         if (level != null) {
             HeroStandRenderer.tickGpuCaches(level.getGameTime());
+        }
+    }
+
+    @SubscribeEvent
+    public static void onRenderLevelStage(RenderLevelStageEvent event) {
+        if (event.getStage() == RenderLevelStageEvent.Stage.AFTER_BLOCK_ENTITIES) {
+            HeroStandRenderer.flushSharedBatch();
         }
     }
 
