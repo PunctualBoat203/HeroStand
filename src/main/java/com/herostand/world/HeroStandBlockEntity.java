@@ -14,20 +14,24 @@ import net.minecraft.world.level.block.state.BlockState;
 public final class HeroStandBlockEntity extends BlockEntity {
     public static final int HEAD=0, CHEST=1, LEGS=2, FEET=3, SLOT_COUNT=4;
     private final NonNullList<ItemStack> armor = NonNullList.withSize(SLOT_COUNT, ItemStack.EMPTY);
+    private int renderRevision;
 
     public HeroStandBlockEntity(BlockPos pos, BlockState state) { super(ModBlockEntities.HERO_STAND.get(), pos, state); }
     public ItemStack getArmor(int slot) { return armor.get(slot); }
     public boolean isEmpty(int slot) { return armor.get(slot).isEmpty(); }
     public NonNullList<ItemStack> armor() { return armor; }
+    public int renderRevision() { return renderRevision; }
 
     public void setArmor(int slot, ItemStack stack) {
         armor.set(slot, stack.copyWithCount(1));
+        renderRevision++;
         sync();
     }
 
     public ItemStack removeArmor(int slot) {
         ItemStack result = armor.get(slot);
         armor.set(slot, ItemStack.EMPTY);
+        renderRevision++;
         sync();
         return result;
     }
@@ -46,6 +50,7 @@ public final class HeroStandBlockEntity extends BlockEntity {
         super.load(tag);
         for (int i=0;i<SLOT_COUNT;i++) armor.set(i, ItemStack.EMPTY);
         ContainerHelper.loadAllItems(tag, armor);
+        renderRevision++;
     }
 
     @Override public CompoundTag getUpdateTag() { return saveWithoutMetadata(); }
