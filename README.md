@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.11**
+Current test build: **0.1.12**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`compat/0.1.12-suitstand-parent`
+
+0.1.11 performance branch:
 `optimize/0.1.11-direct-palladium-armor`
 
 0.1.10 comparison branch:
@@ -141,6 +144,28 @@ Validation priority for 0.1.11:
 - Confirm wall occlusion and render-distance de-render still behave exactly as before.
 - If FPS is still near 80, the remaining bottleneck is primarily geometry/pack-layer vertex rendering rather than renderer setup.
 
+## 0.1.12 suit-model compatibility test
+
+While broad-testing additional suits on **0.1.10**, the user found one suit set whose helmet/head geometry renders far above the torso while the body remains correctly positioned. Most other tested suits render correctly, so this is a custom-model compatibility issue rather than a global HeroStand transform failure.
+
+Root cause identified in the fast path:
+- HeroStand used `ArmorStandArmorModel` as the parent model for Palladium armor/pack-layer property copying.
+- Palladium's real `SuitStandRenderer` uses `SuitStandBasePlateModel`, which is built from normal `HumanoidModel.createMesh(...)` pivots.
+- In Minecraft 1.20.1, `ArmorStandArmorModel` changes part positions (notably head Y=1 and legs Y=11), while normal humanoid/SuitStand pivots use head Y=0 and legs Y=12.
+- Palladium's custom model path calls `HumanoidModel.copyPropertiesTo(...)`, which copies part positions as well as rotations. Custom authored suit geometry can therefore inherit the wrong parent pivots and become visibly detached.
+
+0.1.12 changes:
+- Uses a standard humanoid parent model with normal player/SuitStand pivots for Palladium fast-path armor and pack layers.
+- Keeps the reusable ArmorStand entity only as the data/equipment context.
+- Preserves the same PoseStack world transform, orientation, distance culling, wall occlusion, and Palladium layer rendering.
+- Includes the 0.1.11 direct-armor performance experiment, but the primary purpose of 0.1.12 is compatibility/visual correctness.
+
+Validation priority:
+- Retest the suit set with the floating/detached helmet.
+- Recheck several previously-correct suits to ensure their head/body/leg placement did not regress.
+- Re-run the many-visible-stands FPS test.
+- Confirm distance and solid-wall culling still work.
+
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
 - Skips rendering when the stand has no armor.
@@ -193,7 +218,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10 result, and current 0.1.11 test build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10 result, 0.1.11 performance experiment, and current 0.1.12 compatibility build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -218,7 +243,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `optimize/0.1.11-direct-palladium-armor` for the current test artifact; keep `optimize/0.1.7-palladium-culling` as the 0.1.9 known baseline and `optimize/0.1.10-visible-path` as the no-significant-gain comparison.
+3. Use `compat/0.1.12-suitstand-parent` for the current compatibility test artifact; keep `optimize/0.1.11-direct-palladium-armor` as the 0.1.11 performance experiment, `optimize/0.1.10-visible-path` as the 0.1.10 comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
