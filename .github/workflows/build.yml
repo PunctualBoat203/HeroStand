@@ -2,7 +2,7 @@ name: Build HeroStand
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "render/0.1.16-cache-lifecycle" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
