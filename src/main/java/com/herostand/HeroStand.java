@@ -1,11 +1,15 @@
 package com.herostand;
 
+import com.herostand.config.HeroStandClientConfig;
+import com.herostand.config.HeroStandServerConfig;
 import com.herostand.registry.ModBlockEntities;
 import com.herostand.registry.ModBlocks;
 import com.herostand.registry.ModCreativeTabs;
 import com.herostand.registry.ModItems;
 import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
 @Mod(HeroStand.MOD_ID)
@@ -18,5 +22,16 @@ public final class HeroStand {
         ModItems.REGISTER.register(bus);
         ModBlockEntities.REGISTER.register(bus);
         ModCreativeTabs.REGISTER.register(bus);
+
+        ModLoadingContext.get().registerConfig(
+                ModConfig.Type.CLIENT,
+                HeroStandClientConfig.SPEC,
+                "herostand-client.toml"
+        );
+        ModLoadingContext.get().registerConfig(
+                ModConfig.Type.SERVER,
+                HeroStandServerConfig.SPEC,
+                "herostand-server.toml"
+        );
     }
 }
