@@ -5,6 +5,8 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.model.HumanoidModel;
+import net.minecraft.client.model.geom.ModelLayerLocation;
+import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.ItemRenderer;
@@ -21,6 +23,7 @@ import net.minecraftforge.fml.ModList;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
@@ -47,6 +50,7 @@ final class PalladiumRenderBridge {
     private final Method getCachedArmorRenderer;
     private final Method getRenderLayers;
     private final Method getArmorModel;
+    private final Method getArmorModels;
     private final Method getArmorTexture;
     private final Method getArmorTextureByKey;
     private final Method getArmorTranslucent;
@@ -54,6 +58,19 @@ final class PalladiumRenderBridge {
     private final MethodHandle dataContextWith;
     private final MethodHandle renderLayer;
     private final Object itemContextType;
+
+    // Conservative compatibility inspection. Custom model layers/render layers are routed to
+    // Palladium's own SuitStandRenderer instead of HeroStand's manual paths.
+    private final Field armorModelMapField;
+    private final Class<?> packRenderLayerClass;
+    private final Class<?> compoundPackRenderLayerClass;
+    private final Class<?> skinOverlayPackRenderLayerClass;
+    private final Class<?> thrusterPackRenderLayerClass;
+    private final Class<?> lightningPackRenderLayerClass;
+    private final Field packModelLookupField;
+    private final Method compoundLayersMethod;
+    private final Method skinTypedGet;
+    private final Object humanoidModelType;
 
     private final PalladiumStaticLayerBridge staticLayers = new PalladiumStaticLayerBridge();
 
@@ -64,6 +81,7 @@ final class PalladiumRenderBridge {
      */
     private final Map<Item, RendererCache> rendererCache = new IdentityHashMap<>();
     private final Map<Item, Boolean> fastPathEligibility = new IdentityHashMap<>();
+    private final Map<Item, Boolean> nativeRendererRequired = new IdentityHashMap<>();
 
     /**
      * HeroStand reuses one client-only ArmorStand for the Palladium fast path. Palladium's
@@ -102,6 +120,7 @@ final class PalladiumRenderBridge {
         Method cached = null;
         Method layers = null;
         Method armorModel = null;
+        Method armorModels = null;
         Method armorTexture = null;
         Method armorTextureByKey = null;
         Method armorTranslucent = null;
@@ -109,6 +128,17 @@ final class PalladiumRenderBridge {
         MethodHandle contextWith = null;
         MethodHandle layerRender = null;
         Object itemType = null;
+
+        Field modelMapField = null;
+        Class<?> packLayerClass = null;
+        Class<?> compoundLayerClass = null;
+        Class<?> skinOverlayLayerClass = null;
+        Class<?> thrusterLayerClass = null;
+        Class<?> lightningLayerClass = null;
+        Field packModelLookup = null;
+        Method compoundLayers = null;
+        Method skinGet = null;
+        Object humanoidType = null;
 
         if (present) {
             try {
@@ -124,6 +154,33 @@ final class PalladiumRenderBridge {
                         "net.threetag.palladium.client.renderer.renderlayer.IPackRenderLayer", false, loader);
                 Class<?> palladiumRenderTypes = Class.forName(
                         "net.threetag.palladium.client.renderer.PalladiumRenderTypes", false, loader);
+                Class<?> armorModelDataClass = Class.forName(
+                        "net.threetag.palladium.client.renderer.item.armor.ArmorModelData", false, loader);
+                Class<?> skinTypedValueClass = Class.forName(
+                        "net.threetag.palladium.util.SkinTypedValue", false, loader);
+                Class<?> modelTypesClass = Class.forName(
+                        "net.threetag.palladium.client.renderer.renderlayer.ModelTypes", false, loader);
+
+                packLayerClass = Class.forName(
+                        "net.threetag.palladium.client.renderer.renderlayer.PackRenderLayer", false, loader);
+                compoundLayerClass = Class.forName(
+                        "net.threetag.palladium.client.renderer.renderlayer.CompoundPackRenderLayer", false, loader);
+                skinOverlayLayerClass = Class.forName(
+                        "net.threetag.palladium.client.renderer.renderlayer.SkinOverlayPackRenderLayer", false, loader);
+                thrusterLayerClass = Class.forName(
+                        "net.threetag.palladium.client.renderer.renderlayer.ThrusterPackRenderLayer", false, loader);
+                lightningLayerClass = Class.forName(
+                        "net.threetag.palladium.client.renderer.renderlayer.LightningSparksRenderLayer", false, loader);
+
+                modelMapField = armorModelDataClass.getDeclaredField("modelByKey");
+                modelMapField.setAccessible(true);
+
+                packModelLookup = packLayerClass.getDeclaredField("modelLookup");
+                packModelLookup.setAccessible(true);
+
+                compoundLayers = compoundLayerClass.getMethod("layers");
+                skinGet = skinTypedValueClass.getMethod("get", net.minecraft.world.entity.Entity.class);
+                humanoidType = modelTypesClass.getField("HUMANOID").get(null);
 
                 try {
                     geckoCancel = Class.forName(
@@ -140,6 +197,7 @@ final class PalladiumRenderBridge {
                         net.minecraft.world.entity.LivingEntity.class,
                         dataContextClass
                 );
+                armorModels = rendererData.getMethod("getModels");
                 armorTexture = rendererData.getMethod("getTexture", dataContextClass);
                 armorTextureByKey = rendererData.getMethod("getTexture", dataContextClass, String.class);
                 armorTranslucent = palladiumRenderTypes.getMethod(
@@ -194,6 +252,7 @@ final class PalladiumRenderBridge {
         this.getCachedArmorRenderer = cached;
         this.getRenderLayers = layers;
         this.getArmorModel = armorModel;
+        this.getArmorModels = armorModels;
         this.getArmorTexture = armorTexture;
         this.getArmorTextureByKey = armorTextureByKey;
         this.getArmorTranslucent = armorTranslucent;
@@ -201,6 +260,17 @@ final class PalladiumRenderBridge {
         this.dataContextWith = contextWith;
         this.renderLayer = layerRender;
         this.itemContextType = itemType;
+
+        this.armorModelMapField = modelMapField;
+        this.packRenderLayerClass = packLayerClass;
+        this.compoundPackRenderLayerClass = compoundLayerClass;
+        this.skinOverlayPackRenderLayerClass = skinOverlayLayerClass;
+        this.thrusterPackRenderLayerClass = thrusterLayerClass;
+        this.lightningPackRenderLayerClass = lightningLayerClass;
+        this.packModelLookupField = packModelLookup;
+        this.compoundLayersMethod = compoundLayers;
+        this.skinTypedGet = skinGet;
+        this.humanoidModelType = humanoidType;
     }
 
     boolean canUseFastPath(HeroStandBlockEntity stand) {
@@ -220,6 +290,114 @@ final class PalladiumRenderBridge {
             disableFastPath();
             return false;
         }
+    }
+
+    /**
+     * Manual HeroStand rendering is intentionally conservative. Palladium add-on packs can author
+     * custom armor model layers and arbitrary pack-layer models. Those can be perfectly valid yet
+     * look wrong when rendered through our simplified parent/model assumptions (Mark One is the
+     * current regression). Detect those cases before drawing and route them to Palladium's real
+     * SuitStandRenderer.
+     */
+    boolean requiresNativeRenderer(ArmorStand entity) {
+        if (!installed || !healthy) return false;
+
+        try {
+            ensureArmorContexts(entity);
+
+            for (int i = 0; i < ARMOR_SLOTS.length; i++) {
+                EquipmentSlot slot = ARMOR_SLOTS[i];
+                ItemStack stack = entity.getItemBySlot(slot);
+                if (stack.isEmpty()) continue;
+
+                Item item = stack.getItem();
+                Boolean cached = nativeRendererRequired.get(item);
+                if (cached != null) {
+                    if (cached) return true;
+                    continue;
+                }
+
+                RendererCache renderer = rendererFor(item);
+                boolean requiresNative = renderer != null
+                        && rendererRequiresNative(renderer, entity);
+
+                nativeRendererRequired.put(item, requiresNative);
+                if (requiresNative) return true;
+            }
+
+            return false;
+        } catch (Throwable ignored) {
+            // Unknown Palladium internals should fail toward correctness, not the aggressive path.
+            return true;
+        }
+    }
+
+    private boolean rendererRequiresNative(RendererCache cache, ArmorStand entity) throws Exception {
+        if (getArmorModels == null || armorModelMapField == null || skinTypedGet == null) {
+            return true;
+        }
+
+        Object modelData = getArmorModels.invoke(cache.renderer);
+        Object rawMap = armorModelMapField.get(modelData);
+        if (rawMap instanceof Map<?, ?> map) {
+            for (Object skinTypedLayer : map.values()) {
+                Object resolved = skinTypedGet.invoke(skinTypedLayer, entity);
+                if (resolved instanceof ModelLayerLocation layer
+                        && !layer.equals(ModelLayers.ARMOR_STAND_OUTER_ARMOR)
+                        && !layer.equals(ModelLayers.ARMOR_STAND_INNER_ARMOR)) {
+                    return true;
+                }
+            }
+        }
+
+        for (Object layer : cache.layers) {
+            if (layerRequiresNative(layer, entity)) return true;
+        }
+
+        return false;
+    }
+
+    private boolean layerRequiresNative(Object layer, ArmorStand entity) throws Exception {
+        if (layer == null) return false;
+
+        if (packRenderLayerClass != null && packRenderLayerClass.isInstance(layer)) {
+            // A default PackRenderLayer may select a custom model layer dynamically. Rather than
+            // guessing scale/pivots, let Palladium own the whole transform for these layers.
+            Object modelLookup = packModelLookupField.get(layer);
+            Object resolvedType = skinTypedGet.invoke(modelLookup, entity);
+            // Even HUMANOID PackRenderLayer entries can select arbitrary custom model layers,
+            // so any generic PackRenderLayer is native-routed for correctness.
+            return true;
+        }
+
+        if (compoundPackRenderLayerClass != null
+                && compoundPackRenderLayerClass.isInstance(layer)) {
+            Object rawChildren = compoundLayersMethod.invoke(layer);
+            if (rawChildren instanceof List<?> children) {
+                for (Object child : children) {
+                    if (layerRequiresNative(child, entity)) return true;
+                }
+            }
+            return false;
+        }
+
+        // These built-in layers are explicitly written around humanoid/SuitStand state and are
+        // safe in the balanced path.
+        if (skinOverlayPackRenderLayerClass != null
+                && skinOverlayPackRenderLayerClass.isInstance(layer)) {
+            return false;
+        }
+        if (thrusterPackRenderLayerClass != null
+                && thrusterPackRenderLayerClass.isInstance(layer)) {
+            return false;
+        }
+        if (lightningPackRenderLayerClass != null
+                && lightningPackRenderLayerClass.isInstance(layer)) {
+            return false;
+        }
+
+        // Unknown/add-on/custom layer types get Palladium's native renderer.
+        return true;
     }
 
     /**
@@ -359,6 +537,7 @@ final class PalladiumRenderBridge {
     void resetSessionCache() {
         rendererCache.clear();
         fastPathEligibility.clear();
+        nativeRendererRequired.clear();
         cachedContextEntity = null;
         directArmorHealthy = installed;
         clearDirectCache();
@@ -592,6 +771,7 @@ final class PalladiumRenderBridge {
         directArmorHealthy = false;
         rendererCache.clear();
         fastPathEligibility.clear();
+        nativeRendererRequired.clear();
         clearDirectCache();
         staticLayers.resetSessionCache();
     }
