@@ -8,11 +8,15 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.3**
+Current test build: **0.2.4**
 
 ## IMPORTANT — current development line
 
 Active renderer rebuild branch:
+
+`rebuild/0.2.4-direct-capture-diag`
+
+0.2.3 single-capture branch:
 
 `rebuild/0.2.3-single-capture`
 
@@ -41,7 +45,8 @@ Known reference points:
 - **0.2.0**: clean renderer reset; user test was a very stable **49–50 FPS**, about **79% GPU**, and about **511 MiB/s allocation** at the mixed-suit wall.
 - **0.2.1**: cache-hot-path correction + F3 diagnostics. User test proved the snapshot cache was being used **0.0%** of the time.
 - **0.2.2**: unknown-layer rejection was removed, but the user's F3 test still showed **0.0% snapshot usage**, **cache=0**, **cap=106**, about **48 FPS / 83% GPU**, and it introduced visible sky flicker. The two-pass capture/sorting-rejection design is therefore abandoned.
-- **0.2.3**: single native capture only; no second recursive entity render. Palladium RenderTypes that still request sorting are sorted once during snapshot upload instead of rejecting the whole suit.
+- **0.2.3**: finally produced a snapshot, but only **1 cached entry / ~1.9% snapshot usage** in the wall test. User still saw roughly **46–48 FPS**, **~81% GPU**, and a new top-of-screen flicker/artifact. F3 showed **cap=133 / cache=1**, so nearly every candidate still failed capture.
+- **0.2.4**: stabilization + diagnostics. Captures Palladium's renderer directly instead of recursively calling EntityRenderDispatcher, reads runtime Palladium texture alpha from the already-uploaded OpenGL texture when no ResourceManager file exists, refuses to freeze genuinely sorted/translucent output, and reports the last rejection reason on F3 as `why=...`.
 
 Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
 
@@ -122,10 +127,9 @@ These stay on Palladium's live native renderer:
 - known lightning-spark layers;
 - ExtraAnimatedModel armor/layer models;
 - textures/layers that still require true partial-alpha translucent sorting;
-- any candidate whose native emitted output changes across the 0.2.2 two-time-sample stability test;
 - any snapshot build that fails.
 
-Important 0.2.2 correction: **unknown/custom render-layer classes are no longer rejected merely because HeroStand does not recognize their Java class name.** Palladium explicitly supports third-party render-layer parsers. Unknown/add-on layers may attempt capture and must prove their actual emitted output is stable before the snapshot is accepted.
+Important correction: **unknown/custom render-layer classes are no longer rejected merely because HeroStand does not recognize their Java class name.** Palladium explicitly supports third-party render-layer parsers. Unknown/add-on layers may attempt native capture; known animated behavior remains live.
 
 This is intentional. Visual correctness wins over cache coverage.
 
@@ -137,16 +141,18 @@ For snapshot capture only:
 - static texture resources are scanned once;
 - textures containing only alpha 0 or 255 may use vanilla cutout/no-cull rendering;
 - any alpha value 1–254 remains truly translucent;
-- generated/dynamic textures that cannot be proven safe remain live.
+- generated/dynamic textures first try normal resource bytes;
+- if a Palladium runtime texture has no ResourceManager file, 0.2.4 may read mip 0 from the already-uploaded OpenGL texture once and inspect the actual alpha bytes;
+- runtime textures that still cannot be proven binary remain live.
 
-True camera-relative translucent geometry is not stored in a reusable snapshot.
+True camera-relative translucent/sorted geometry is not stored in a reusable snapshot. This is specifically to avoid the top-of-screen artifact observed when 0.2.3 reused a once-sorted translucent snapshot.
 
 ### Snapshot lifecycle / VRAM limits
 
 The snapshot cache is bounded:
 - maximum **192** complete suit/light snapshots;
 - maximum **4 lighting variants per unique suit**;
-- maximum **2 new snapshot builds per game tick** so a showroom warms progressively;
+- maximum **1 new snapshot build per game tick** so a showroom warms progressively without large capture spikes;
 - unused snapshots are retired after **120 seconds**;
 - sweep runs every **5 seconds**, including while stands are offscreen;
 - world changes clear snapshots;
@@ -446,3 +452,34 @@ For future performance work:
 - keep dynamic visuals live;
 - do not regress the working distance/wall culling behavior;
 - prefer simple architecture over accumulating renderer hacks.
+
+
+## 0.2.4 direct capture / runtime texture alpha diagnostics
+
+0.2.3 user test:
+- approximately **46 FPS**
+- approximately **81% GPU**
+- F3: **snap ~1.9%**, **cache=1**, **cap=133**
+- visible intermittent artifact/flicker near the top of the screen
+
+Interpretation:
+- snapshot rendering finally executed, but only one entry actually survived capture;
+- almost all candidates still failed;
+- the artifact appeared only after sorted/translucent snapshot replay became possible, so that replay path is considered unsafe.
+
+0.2.4 changes:
+- snapshot capture calls Palladium's actual renderer directly via `EntityRenderDispatcher.getRenderer(...).render(...)` rather than recursively invoking the dispatcher;
+- dispatcher/world extras are not part of reusable snapshot capture;
+- runtime Palladium textures can be alpha-classified from their uploaded OpenGL texture when no normal resource file exists;
+- only proven binary-alpha runtime textures may be converted to cutout/no-cull;
+- any RenderType that still requires camera-relative sorting is rejected from the snapshot cache and stays live;
+- no upload-time frozen translucent sorting is used;
+- F3 now includes `why=<reason>`, exposing the most recent snapshot rejection such as sorted RenderType, empty capture, or the underlying exception type/message;
+- author / owner remains **PunctualBoat**.
+
+Validation:
+- verify the previous top-of-screen artifact is gone;
+- face the same mixed-suit wall for several seconds;
+- record the full HeroStand F3 line, especially `snap`, `build`, `live`, `cap`, `cache`, and `why`;
+- if `why` reports a sorted RenderType, the next optimization target is that specific Palladium texture/layer;
+- if `why` reports an exception, fix that exact capture path before making further performance assumptions.
