@@ -36,7 +36,7 @@ The base should remain simple, clean, light/white iron-like.
 ## Current state / confirmed fixes
 Earlier builds rendered as Minecraft's purple/black missing model. The major cause was invalid block-model geometry extending to Y=34. The model was repaired to stay within valid baked-model bounds.
 
-As of 0.1.5:
+As of 0.1.5 (user-tested):
 - Missing purple/black model issue was substantially improved/fixed in testing.
 - Static mannequin geometry was removed from the equipped-suit path; pedestal remains.
 - Client ArmorStand render context is reused instead of allocated every render call.
@@ -51,9 +51,9 @@ As of 0.1.5:
 - Renderer view distance is 48 blocks.
 
 ## CURRENT BUG — highest priority
-**Suit orientation is still wrong.**
+**Suit orientation is still wrong and currently jitters/vibrates.**
 
-User report from 0.1.5:
+Latest user report from 0.1.5:
 > stand being default invis is fine / preferred, but suit orientation is not fixed and it is “vibrating trying to fix itself.”
 
 This must be fixed before adding new features.
