@@ -302,9 +302,10 @@ final class PalladiumRenderBridge {
      * Renders only ArmorRendererData pack layers. Ability/player-global layers are intentionally
      * omitted because a HeroStand is a static display, not a powered living wearer.
      */
-    void renderPackLayers(ArmorStand entity, EntityModel<?> parentModel, PoseStack poseStack,
-                          MultiBufferSource buffers, int packedLight, float partialTick) {
-        if (!healthy) return;
+    boolean renderPackLayers(ArmorStand entity, EntityModel<?> parentModel, PoseStack poseStack,
+                             MultiBufferSource buffers, int packedLight, float partialTick,
+                             boolean accelerated) {
+        if (!healthy) return false;
 
         try {
             ensureArmorContexts(entity);
@@ -333,7 +334,7 @@ final class PalladiumRenderBridge {
                 dataContextWith.invokeExact(context, itemContextType, (Object) stack);
 
                 for (Object layer : cache.layers) {
-                    boolean handled = staticLayers.renderIfSupported(
+                    boolean handled = accelerated && staticLayers.renderIfSupported(
                             layer, context, entity, parentModel, stack, slot,
                             poseStack, buffers, packedLight, partialTick,
                             entity.level().getGameTime()
@@ -347,8 +348,11 @@ final class PalladiumRenderBridge {
                     }
                 }
             }
+
+            return true;
         } catch (Throwable ignored) {
             disableFastPath();
+            return false;
         }
     }
 
