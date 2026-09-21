@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.9**
+Current test build: **0.1.10**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
-Active branch:
+Active test branch:
+`optimize/0.1.10-visible-path`
+
+Known-good 0.1.9 baseline branch:
 `optimize/0.1.7-palladium-culling`
 
 Relevant version points:
@@ -70,7 +73,7 @@ Relevant 0.1.8 commits:
 - `950798e807f836dbfbeb2c8b71691a9a5457ac3d` — cache Palladium renderer metadata
 - `9af1dc0ec57c7d6b0287ba78f17ba5e8f1e5f99a` — prepare 0.1.8
 
-## Current build — 0.1.9
+## Current baseline — 0.1.9
 0.1.9 continues from the 0.1.8 rendering path. It does **not** revert to the old 0.1.6 renderer.
 
 Changes after 0.1.8 are primarily render-distance/configuration work:
@@ -89,6 +92,27 @@ Relevant commits after 0.1.8:
 - `e2e5ec0a5d412919d89c4830be4927e1ae851f22` — register server config
 - `d4ca28b1e04a96c086853ccd901808b6649a1c34` — enforce server render-distance cap on clients
 - `9438cb8f50b52ebf8834efb5977c56735f610076` — prepare 0.1.9
+
+## 0.1.10 performance test build
+
+0.1.10 is a regression-focused visible-stand performance pass built directly from the 0.1.9 renderer line. It intentionally preserves the distance cutoff, wall occlusion, Palladium transforms, orientation strategy, and fallback renderer.
+
+Changes in 0.1.10:
+- Reuse Palladium armor-slot `DataContext` objects for the reusable fast-path ArmorStand instead of allocating a new DataContext + HashMap for every equipped slot on every stand on every frame.
+- Update only the mutable ITEM value in each cached Palladium DataContext before rendering the current stand.
+- Cache per-item fast-path eligibility.
+- Cache the last per-slot Palladium renderer metadata for repeated identical suits.
+- Reduce repeated static clear-air visibility raycasts for already-visible stands.
+- Stagger visibility refreshes by block position so a large wall of stands does not all raycast on the same tick.
+- Keep occlusion refreshes fast when the camera moves, preserving wall hide/reveal behavior.
+- Avoid one per-frame center Vec3 allocation in distance checks.
+- Version bumped to 0.1.10.
+
+Stress-test reference from the user:
+- Many visible stands at once: approximately mid-80s FPS in 0.1.9.
+- Beyond the configured render distance: approximately 118 FPS and stands correctly de-render.
+- Behind a solid wall: approximately 118 FPS and stands correctly occlude.
+- Therefore 0.1.10 must optimize only the visible path and must not weaken the working distance/wall culling behavior.
 
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
@@ -115,7 +139,7 @@ Do **not** treat the stale 0.1.5/0.1.6 README state on old commits as current gu
 
 In particular:
 - Do not rebuild from `main` and call that the latest JAR.
-- Do not remove the 0.1.8/0.1.9 Palladium fast path unless deliberately debugging it.
+- Do not remove the 0.1.8/0.1.9/0.1.10 Palladium fast path unless deliberately debugging it.
 - Do not remove cached occlusion behavior without an explicit replacement/test.
 - Do not reintroduce double-applied entity + dispatcher yaw.
 - Do not claim a renderer change is better until compared in-game against the user's 0.1.8 reference JAR.
@@ -142,7 +166,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR** and current 0.1.9 build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, and current 0.1.10 test build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -167,7 +191,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Prefer the active `optimize/0.1.7-palladium-culling` line until it is merged/superseded.
+3. Use `optimize/0.1.10-visible-path` for the 0.1.10 test artifact; keep `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline until 0.1.10 is user-validated.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
