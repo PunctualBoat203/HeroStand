@@ -156,7 +156,7 @@ final class PalladiumRenderBridge {
                 contextWith = lookup.unreflect(dataContextClass.getMethod(
                                 "with", dataContextTypeClass, Object.class))
                         .asType(MethodType.methodType(
-                                Object.class,
+                                void.class,
                                 Object.class, Object.class, Object.class));
 
                 itemType = dataContextTypeClass.getField("ITEM").get(null);
@@ -326,7 +326,7 @@ final class PalladiumRenderBridge {
 
                 // DataContext is mutable. ENTITY/LEVEL/SLOT stay constant because this fast-path
                 // ArmorStand is reused; only ITEM needs to track the stand currently being drawn.
-                dataContextWith.invoke(context, itemContextType, stack);
+                dataContextWith.invokeExact(context, itemContextType, (Object) stack);
 
                 for (Object layer : cache.layers) {
                     boolean handled = staticLayers.renderIfSupported(
