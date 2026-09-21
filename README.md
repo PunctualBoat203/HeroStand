@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.16**
+Current test build: **0.1.17**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`render/0.1.17-batch-first-native-compat`
+
+0.1.16 cache/VBO branch:
 `render/0.1.16-cache-lifecycle`
 
 0.1.15 modern GPU branch:
@@ -356,6 +359,66 @@ Expected result:
 - Leave/re-enter the world and verify no stale suit buffers survive the session transition.
 - Continue checking the custom black suit and distance/wall culling behavior.
 
+## 0.1.17 batch-first / Mark One compatibility correction
+
+The 0.1.15/0.1.16 VBO experiment produced no meaningful user-visible FPS improvement. A deeper comparison against Minecraft's immediate-mode pipeline and ImmediatelyFast identified a simple architectural mistake:
+
+- Minecraft's normal block-entity pass uses a shared `MultiBufferSource.BufferSource`.
+- A single fallback BufferBuilder is ended whenever rendering switches to a different non-fixed RenderType.
+- Palladium suits frequently switch RenderTypes/textures, especially across a mixed-suit showroom.
+- The 0.1.15/0.1.16 static-VBO path avoided rebuilding some geometry, but then issued **small per-stand/per-RenderType GPU draws directly**.
+- That trades Java vertex work for additional small GL submissions/state changes, which is exactly the pattern ImmediatelyFast and vendor optimization guidance try to avoid.
+- ImmediatelyFast's entity/block-entity optimization uses a per-RenderType batching buffer and delays submission so matching RenderTypes can be drawn in larger batches.
+
+0.1.17 therefore changes strategy:
+
+### HeroStand batching
+- The modern static VBO backend is disabled from automatic selection.
+- HeroStand now uses a small internal per-RenderType batcher during the normal block-entity pass.
+- Consolidatable RenderTypes receive their own BufferBuilder instead of repeatedly sharing/flushing Minecraft's one fallback builder.
+- HeroStand batches are flushed once at Forge's `AFTER_BLOCK_ENTITIES` render stage.
+- Non-consolidatable RenderTypes use Minecraft's original source immediately.
+- Destruction/crumbling wrapper sources are not intercepted.
+- If another mod has replaced `MultiBufferSource.BufferSource` with a subclass (for example an external batching implementation), HeroStand does **not** wrap it. This avoids double-batching and lets renderer optimization mods keep control.
+- Distance and wall occlusion are unchanged.
+
+This is deliberately modeled after the successful *architecture* used by immediate-mode optimization mods, not copied as a dependency or hard requirement.
+
+### Mark One / custom suit correctness
+The user confirmed Mark One was still visually wrong after 0.1.16:
+- detached/floating head
+- chest, legs, and boots rendered too small relative to the stand body/hitbox
+
+This revealed a second issue: a manual renderer can complete without throwing while still interpreting a custom Palladium model incorrectly. Soft-failure exception handling cannot detect that.
+
+0.1.17 adds a **pre-draw compatibility gate**:
+- Inspect each Palladium armor renderer before choosing a manual backend.
+- Custom armor model-layer locations are considered native-only.
+- Generic `PackRenderLayer` model layers are considered native-only because they can select arbitrary add-on model layers/transforms.
+- Compound layers recurse into their children.
+- Unknown/add-on/custom render-layer classes are native-only by default.
+- Known simple built-in humanoid effects may continue through the balanced path.
+- A native-only suit is sent directly to a real client-only Palladium `SuitStand` rendered by Palladium's own `SuitStandRenderer`.
+
+This is intended to make Mark One use the same model assumptions, scale, parent pivots, and layer system that Palladium itself uses, instead of trying to reproduce them manually.
+
+### Performance diagnosis after web/source deep dive
+Relevant external renderer work strongly points to **fewer/larger draw submissions** as the next correct direction:
+- ImmediatelyFast explicitly optimizes entities and block entities by batching immediate-mode rendering and GPU uploads.
+- NVIDIA guidance recommends maximizing batch size and warns that many small buffers/draw calls create CPU overhead.
+- AMD's RDNA guide likewise recommends minimizing submissions and avoiding many small command batches.
+- Palladium's base armor RenderType is also translucent/no-cull, which is potentially expensive. A future optimization should classify truly opaque/cutout armor textures and avoid alpha blending where it is not visually required, but that should be introduced only after Mark One/native routing and batching are validated.
+
+0.1.17 validation:
+- **Mark One first:** verify head, chest, legs, and boots all match normal SuitStand/HeroStand body size and placement.
+- Repeat the large mixed-suit wall test and compare FPS/GPU/allocation against 0.1.16.
+- Test with and without ImmediatelyFast if available; HeroStand should not double-wrap its custom BufferSource.
+- Verify transparent/glowing/thruster suits still draw correctly.
+- Verify distance de-render and solid-wall occlusion remain unchanged.
+- Watch for transparency ordering problems because HeroStand now delays consolidatable suit RenderTypes until AFTER_BLOCK_ENTITIES.
+
+If batching helps but GPU load remains high, the next simple GPU-side candidate is **opaque/cutout classification** for Palladium armor textures so fully opaque armor does not pay translucent blending cost. Full instancing/texture-atlas work should come only after those simpler fixes are measured.
+
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
 - Skips rendering when the stand has no armor.
@@ -408,7 +471,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.15 results, and current 0.1.16 cache-lifecycle build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.16 results, and current 0.1.17 batch-first/native-compat build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -433,7 +496,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `render/0.1.16-cache-lifecycle` for the current modern-GPU/cache-lifecycle test artifact; keep `render/0.1.15-modern-static-vbo` as the first VBO implementation comparison, `render/0.1.14-gpu-backends` as the pure failover/context comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
+3. Use `render/0.1.17-batch-first-native-compat` for the current test artifact; keep `render/0.1.16-cache-lifecycle` as the no-gain VBO/cache comparison, `render/0.1.14-gpu-backends` for backend/failover history, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
