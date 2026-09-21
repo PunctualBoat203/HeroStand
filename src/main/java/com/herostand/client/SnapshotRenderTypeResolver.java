@@ -24,12 +24,14 @@ final class SnapshotRenderTypeResolver {
     private final TextureAlphaClassifier alphaClassifier = new TextureAlphaClassifier();
 
     private final Field nameField;
+    private final Field sortOnUploadField;
     private final Field stateField;
     private final Field textureStateField;
     private final Method cutoutTextureMethod;
 
     SnapshotRenderTypeResolver() {
         Field name = null;
+        Field sortOnUpload = null;
         Field state = null;
         Field texture = null;
         Method cutout = null;
@@ -37,6 +39,9 @@ final class SnapshotRenderTypeResolver {
         try {
             name = RenderStateShard.class.getDeclaredField("name");
             name.setAccessible(true);
+
+            sortOnUpload = RenderType.class.getDeclaredField("sortOnUpload");
+            sortOnUpload.setAccessible(true);
 
             Class<?> compositeType =
                     Class.forName("net.minecraft.client.renderer.RenderType$CompositeRenderType");
@@ -56,6 +61,7 @@ final class SnapshotRenderTypeResolver {
         }
 
         this.nameField = name;
+        this.sortOnUploadField = sortOnUpload;
         this.stateField = state;
         this.textureStateField = texture;
         this.cutoutTextureMethod = cutout;
@@ -88,6 +94,16 @@ final class SnapshotRenderTypeResolver {
             return RenderType.entityCutoutNoCull(texture.get());
         } catch (Throwable ignored) {
             return original;
+        }
+    }
+
+    boolean requiresSorting(RenderType renderType) {
+        if (sortOnUploadField == null) return true;
+
+        try {
+            return sortOnUploadField.getBoolean(renderType);
+        } catch (Throwable ignored) {
+            return true;
         }
     }
 
