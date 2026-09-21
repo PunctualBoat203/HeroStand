@@ -123,26 +123,30 @@ public final class HeroStandRenderer
 
             long gameTime = level.getGameTime();
 
-            /*
-             * 0.2.1 true hot path: test the block entity's own four ItemStacks before touching
-             * Palladium reflection or mutating a reusable SuitStand render context.
-             */
-            if (snapshots.renderCached(
-                    stand,
-                    packedLight,
-                    gameTime,
-                    poseStack)) {
-                statSnapshotHits++;
-                return;
-            }
-
             if (palladium.isPalladiumSuit(stand)) {
                 ArmorStand suitContext =
                         palladium.prepareContext(stand, level);
 
                 if (suitContext != null) {
-                    if (snapshots.shouldAttemptBuild(stand, gameTime)) {
-                        if (palladium.isSnapshotSafe(suitContext)) {
+                    boolean baseArmorDrawn = false;
+
+                    /*
+                     * 0.2.6 caches ONLY Palladium's native HumanoidArmorLayer. The
+                     * PackRenderLayerRenderer remains live, so entity_translucent add-on layers,
+                     * thrusters and other effects never enter HeroStand's VBO snapshot.
+                     */
+                    if (snapshots.renderCached(
+                            stand,
+                            packedLight,
+                            gameTime,
+                            poseStack)) {
+                        statSnapshotHits++;
+                        baseArmorDrawn = true;
+                    } else if (snapshots.shouldAttemptBuild(
+                            stand,
+                            gameTime)) {
+                        if (palladium.isBaseArmorSnapshotSafe(
+                                suitContext)) {
                             StaticSuitSnapshotCache.BuildResult result =
                                     snapshots.renderOrBuild(
                                             stand,
@@ -150,64 +154,81 @@ public final class HeroStandRenderer
                                             packedLight,
                                             gameTime,
                                             poseStack,
-                                            (localPose, captureSource, samplePartialTick) -> {
-                                                /*
-                                                 * Capture only Palladium's actual SuitStandRenderer
-                                                 * output. Do not recurse through EntityRenderDispatcher:
-                                                 * dispatcher extras/wrapping are world-render concerns,
-                                                 * not part of the reusable suit visual.
-                                                 */
-                                                minecraft
-                                                        .getEntityRenderDispatcher()
-                                                        .getRenderer(suitContext)
-                                                        .render(
-                                                                suitContext,
-                                                                0.0F,
-                                                                samplePartialTick,
-                                                                localPose,
-                                                                captureSource,
-                                                                packedLight
-                                                        );
+                                            (localPose,
+                                             captureSource,
+                                             samplePartialTick) -> {
+                                                if (!palladium.renderBaseArmor(
+                                                        suitContext,
+                                                        localPose,
+                                                        captureSource,
+                                                        packedLight,
+                                                        samplePartialTick)) {
+                                                    throw new IllegalStateException(
+                                                            "Palladium base armor capture failed");
+                                                }
                                             }
                                     );
 
-                            if (result == StaticSuitSnapshotCache.BuildResult.DRAWN) {
+                            if (result
+                                    == StaticSuitSnapshotCache.BuildResult.DRAWN) {
                                 statSnapshotBuildDraws++;
-                                return;
-                            }
-
-                            if (result == StaticSuitSnapshotCache.BuildResult.REJECTED) {
+                                baseArmorDrawn = true;
+                            } else if (result
+                                    == StaticSuitSnapshotCache.BuildResult.REJECTED) {
                                 statCaptureRejects++;
                             } else {
                                 statBuildDeferred++;
                             }
                         } else {
-                            /*
-                             * This was a major 0.2.0 waste: unsafe/dynamic suits were reflectively
-                             * re-inspected every frame even though they could not be snapshotted.
-                             */
-                            snapshots.markUncacheable(stand, gameTime);
+                            snapshots.markUncacheable(
+                                    stand,
+                                    gameTime);
                             statSafetyRejects++;
                         }
                     } else {
                         statBlockedDynamic++;
                     }
 
-                    statLivePalladium++;
+                    if (!baseArmorDrawn) {
+                        if (!palladium.renderBaseArmor(
+                                suitContext,
+                                poseStack,
+                                buffers,
+                                packedLight,
+                                partialTick)) {
+                            /*
+                             * Layer bridge unavailable: use Palladium's complete renderer for
+                             * correctness. This branch is reached before pack-layer rendering.
+                             */
+                            minecraft.getEntityRenderDispatcher().render(
+                                    suitContext,
+                                    0.0D,
+                                    0.0D,
+                                    0.0D,
+                                    0.0F,
+                                    partialTick,
+                                    poseStack,
+                                    buffers,
+                                    packedLight
+                            );
+                            statLivePalladium++;
+                            return;
+                        }
+                    }
 
-                    // Dynamic, truly translucent, unknown, or not-yet-cached:
-                    // use Palladium's real SuitStandRenderer.
-                    minecraft.getEntityRenderDispatcher().render(
+                    /*
+                     * Always render Palladium pack/add-on layers live. This is the part of the
+                     * renderer where Palladium intentionally uses entityTranslucent, glow,
+                     * thrusters, lightning and third-party render-layer behavior.
+                     */
+                    palladium.renderLivePackLayers(
                             suitContext,
-                            0.0D,
-                            0.0D,
-                            0.0D,
-                            0.0F,
-                            partialTick,
                             poseStack,
                             buffers,
-                            packedLight
+                            packedLight,
+                            partialTick
                     );
+                    statLivePalladium++;
                     return;
                 }
             }
@@ -353,7 +374,7 @@ public final class HeroStandRenderer
 
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.5 snap=%.1f%% hit=%d build=%d live=%d dyn=%d cap=%d cache=%d why=%s",
+                "HeroStand 0.2.6 armor=%.1f%% hit=%d build=%d layers=%d unsafe=%d cap=%d cache=%d why=%s",
                 hitPercent,
                 statSnapshotHits,
                 statSnapshotBuildDraws,
