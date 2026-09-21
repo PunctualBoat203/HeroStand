@@ -333,23 +333,21 @@ final class PalladiumRenderBridge {
     }
 
     private boolean rendererRequiresNative(RendererCache cache, ArmorStand entity) throws Exception {
-        if (getArmorModels == null || armorModelMapField == null || skinTypedGet == null) {
-            return true;
-        }
-
-        Object modelData = getArmorModels.invoke(cache.renderer);
-        Object rawMap = armorModelMapField.get(modelData);
-        if (rawMap instanceof Map<?, ?> map) {
-            for (Object skinTypedLayer : map.values()) {
-                Object resolved = skinTypedGet.invoke(skinTypedLayer, entity);
-                if (resolved instanceof ModelLayerLocation layer
-                        && !layer.equals(ModelLayers.ARMOR_STAND_OUTER_ARMOR)
-                        && !layer.equals(ModelLayers.ARMOR_STAND_INNER_ARMOR)) {
-                    return true;
-                }
-            }
-        }
-
+        /*
+         * 0.1.19 correction:
+         *
+         * A custom armor ModelLayerLocation is NOT inherently unsafe. Palladium's own
+         * HumanoidArmorLayerMixin resolves those custom HumanoidModels, copies parent properties,
+         * applies slot visibility and renders them exactly like HeroStand's direct path does.
+         *
+         * The old native-only rule accidentally routed most superhero suits back through the full
+         * SuitStand renderer. Mark One's half-size body / separated head was instead explained by
+         * HeroStand leaving EntityModel.young=true on its manual parent model. That is now pinned
+         * false in HeroStandRenderer.
+         *
+         * Keep native routing only for render-layer classes whose semantics we genuinely cannot
+         * reproduce safely.
+         */
         for (Object layer : cache.layers) {
             if (layerRequiresNative(layer, entity)) return true;
         }
