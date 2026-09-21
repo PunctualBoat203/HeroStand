@@ -64,6 +64,19 @@ public final class HeroStandRenderer
     private static long statVanillaFallback;
     private static long statBridgeFallbacks;
 
+    // Rolling one-second profiler shown only while the F3 debug overlay is open.
+    private static long perfSampleWallNanos;
+    private static long perfSampleBaseNanos;
+    private static long perfSamplePackNanos;
+    private static long perfSamplePackCalls;
+    private static long perfSampleGeckoRenders;
+    private static double perfBaseShare;
+    private static double perfPackShare;
+    private static double perfPackMicrosPerStand;
+    private static double perfStandsPerSecond;
+    private static double perfGeckoPerSecond;
+    private static double perfGeckoPerStand;
+
     private final PalladiumNativeBridge palladium =
             new PalladiumNativeBridge();
 
@@ -305,7 +318,7 @@ public final class HeroStandRenderer
 
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.9 planHit=%d build=%d plans=%d layers=%d calls=%d condReuse=%d condNew=%d fallback=%d",
+                "HeroStand 0.2.10 planHit=%d build=%d plans=%d layers=%d calls=%d condReuse=%d condNew=%d fallback=%d",
                 planHits,
                 planBuilds,
                 plans,
@@ -317,12 +330,99 @@ public final class HeroStandRenderer
         );
     }
 
+    static String debugPerfLine() {
+        long baseNanos = 0L;
+        long packNanos = 0L;
+        long packCalls = 0L;
+
+        synchronized (ACTIVE_RENDERERS) {
+            for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
+                baseNanos += renderer.palladium.baseRenderNanos();
+                packNanos += renderer.palladium.packRenderNanos();
+                packCalls += renderer.palladium.packRenderCalls();
+            }
+        }
+
+        long geckoRenders =
+                PalladiumConditionContext.heroStandGeckoRenders();
+        long now = System.nanoTime();
+
+        if (perfSampleWallNanos == 0L) {
+            perfSampleWallNanos = now;
+            perfSampleBaseNanos = baseNanos;
+            perfSamplePackNanos = packNanos;
+            perfSamplePackCalls = packCalls;
+            perfSampleGeckoRenders = geckoRenders;
+        } else {
+            long wallDelta = now - perfSampleWallNanos;
+
+            if (wallDelta >= 1_000_000_000L) {
+                long baseDelta =
+                        Math.max(0L, baseNanos - perfSampleBaseNanos);
+                long packDelta =
+                        Math.max(0L, packNanos - perfSamplePackNanos);
+                long callsDelta =
+                        Math.max(0L, packCalls - perfSamplePackCalls);
+                long geckoDelta =
+                        Math.max(0L, geckoRenders - perfSampleGeckoRenders);
+
+                double seconds = wallDelta / 1_000_000_000.0D;
+                perfBaseShare =
+                        100.0D * baseDelta / wallDelta;
+                perfPackShare =
+                        100.0D * packDelta / wallDelta;
+                perfPackMicrosPerStand =
+                        callsDelta == 0L
+                                ? 0.0D
+                                : packDelta / 1_000.0D / callsDelta;
+                perfStandsPerSecond =
+                        callsDelta / seconds;
+                perfGeckoPerSecond =
+                        geckoDelta / seconds;
+                perfGeckoPerStand =
+                        callsDelta == 0L
+                                ? 0.0D
+                                : (double) geckoDelta / callsDelta;
+
+                perfSampleWallNanos = now;
+                perfSampleBaseNanos = baseNanos;
+                perfSamplePackNanos = packNanos;
+                perfSamplePackCalls = packCalls;
+                perfSampleGeckoRenders = geckoRenders;
+            }
+        }
+
+        return String.format(
+                java.util.Locale.ROOT,
+                "HS perf pack=%.1f%% base=%.1f%% pack=%.1fus/stand stands=%.0f/s gecko=%.0f/s g/stand=%.1f",
+                perfPackShare,
+                perfBaseShare,
+                perfPackMicrosPerStand,
+                perfStandsPerSecond,
+                perfGeckoPerSecond,
+                perfGeckoPerStand
+        );
+    }
+
     static void clearAllCaches() {
         Runnable clear = () -> {
             statRenderCalls = 0L;
             statPalladiumFrames = 0L;
             statVanillaFallback = 0L;
             statBridgeFallbacks = 0L;
+
+            perfSampleWallNanos = 0L;
+            perfSampleBaseNanos = 0L;
+            perfSamplePackNanos = 0L;
+            perfSamplePackCalls = 0L;
+            perfSampleGeckoRenders = 0L;
+            perfBaseShare = 0.0D;
+            perfPackShare = 0.0D;
+            perfPackMicrosPerStand = 0.0D;
+            perfStandsPerSecond = 0.0D;
+            perfGeckoPerSecond = 0.0D;
+            perfGeckoPerStand = 0.0D;
+
             PalladiumConditionContext.resetStats();
 
             synchronized (ACTIVE_RENDERERS) {
