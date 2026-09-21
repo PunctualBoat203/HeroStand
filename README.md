@@ -14,6 +14,8 @@ The current rendering work is **not on `main`**.
 Active test branch:
 `optimize/0.1.10-visible-path`
 
+Draft validation PR: **#3**
+
 Known-good 0.1.9 baseline branch:
 `optimize/0.1.7-palladium-culling`
 
