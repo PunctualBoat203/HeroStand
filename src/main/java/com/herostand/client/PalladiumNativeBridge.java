@@ -23,12 +23,10 @@ import net.minecraftforge.fml.ModList;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 /**
  * Palladium bridge for HeroStand.
@@ -59,8 +57,6 @@ final class PalladiumNativeBridge {
 
     private final Method forEachPackLayer;
     private final Method packLayerRender;
-    private final Method packLayerCreateSnapshot;
-    private final Method snapshotGetModel;
     private final Method compoundLayers;
     private final Method contextGetItem;
     private final Method contextGetSlot;
@@ -90,8 +86,6 @@ final class PalladiumNativeBridge {
 
         Method forEachLayer = null;
         Method layerRender = null;
-        Method createSnapshot = null;
-        Method snapshotModel = null;
         Method compoundChildren = null;
         Method getItem = null;
         Method getSlot = null;
@@ -113,9 +107,6 @@ final class PalladiumNativeBridge {
                         "net.threetag.palladium.util.context.DataContext", false, loader);
                 Class<?> packInterface = Class.forName(
                         "net.threetag.palladium.client.renderer.renderlayer.IPackRenderLayer",
-                        false, loader);
-                Class<?> snapshotClass = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.IPackRenderLayer$Snapshot",
                         false, loader);
                 Class<?> managerClass = Class.forName(
                         "net.threetag.palladium.client.renderer.renderlayer.PackRenderLayerManager",
@@ -148,13 +139,6 @@ final class PalladiumNativeBridge {
                         float.class,
                         float.class
                 );
-                createSnapshot = packInterface.getMethod(
-                        "createSnapshot",
-                        dataContextClass,
-                        EntityModel.class,
-                        Consumer.class
-                );
-                snapshotModel = snapshotClass.getMethod("getModel");
                 compoundChildren = compound.getMethod("layers");
                 getItem = dataContextClass.getMethod("getItem");
                 getSlot = dataContextClass.getMethod("getSlot");
@@ -192,8 +176,6 @@ final class PalladiumNativeBridge {
 
         forEachPackLayer = forEachLayer;
         packLayerRender = layerRender;
-        packLayerCreateSnapshot = createSnapshot;
-        snapshotGetModel = snapshotModel;
         compoundLayers = compoundChildren;
         contextGetItem = getItem;
         contextGetSlot = getSlot;
@@ -352,6 +334,21 @@ final class PalladiumNativeBridge {
                         return;
                     }
 
+                    /*
+                     * Thrusters/lightning are stateful even when they happen to emit the same
+                     * vertices in two immediate samples. Keep those live. For ordinary default,
+                     * skin-overlay and compound layers, the CPU recorder itself decides whether
+                     * output is stable by comparing two animation-time samples.
+                     */
+                    if (containsKnownDynamicLayer(layer)) {
+                        renderLayerLive(
+                                layer, dataContext, suitStand,
+                                outerPose, buffers, packedLight, partialTick);
+                        stats.live++;
+                        stats.dynamic++;
+                        return;
+                    }
+
                     StaticPackVertexCache.Result result =
                             packVertexCache.renderOrBuild(
                                     layer,
@@ -361,8 +358,6 @@ final class PalladiumNativeBridge {
                                     gameTime,
                                     outerPose,
                                     buffers,
-                                    () -> layerSnapshotCapable(
-                                            layer, dataContext),
                                     (captureSource, tickOffset, samplePartialTick) ->
                                             captureLayer(
                                                     layer,
@@ -511,43 +506,29 @@ final class PalladiumNativeBridge {
         return true;
     }
 
-    private boolean layerSnapshotCapable(Object layer,
-                                         Object dataContext) throws Throwable {
-        if (compoundLayerClass.isInstance(layer)) {
-            Object raw = compoundLayers.invoke(layer);
-            if (!(raw instanceof List<?> children) || children.isEmpty()) {
-                return false;
-            }
+    private boolean containsKnownDynamicLayer(Object layer) throws Throwable {
+        if (layer == null) return true;
 
-            for (Object child : children) {
-                if (!layerSnapshotCapable(child, dataContext)) {
-                    return false;
-                }
-            }
+        String name = layer.getClass().getName();
+        if (name.endsWith(".ThrusterPackRenderLayer")
+                || name.endsWith(".LightningSparksRenderLayer")) {
             return true;
         }
 
-        List<Object> snapshots = new ArrayList<>();
-        @SuppressWarnings("unchecked")
-        Consumer<Object> collector = snapshots::add;
+        if (compoundLayerClass.isInstance(layer)) {
+            Object raw = compoundLayers.invoke(layer);
+            if (!(raw instanceof List<?> children)) {
+                return true;
+            }
 
-        packLayerCreateSnapshot.invoke(
-                layer,
-                dataContext,
-                parentModel,
-                collector
-        );
-
-        if (snapshots.isEmpty()) return false;
-
-        for (Object snapshot : snapshots) {
-            Object model = snapshotGetModel.invoke(snapshot);
-            if (model != null && extraAnimatedModelClass.isInstance(model)) {
-                return false;
+            for (Object child : children) {
+                if (containsKnownDynamicLayer(child)) {
+                    return true;
+                }
             }
         }
 
-        return true;
+        return false;
     }
 
     private void captureLayer(Object layer,
