@@ -4,6 +4,7 @@
 HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero/modded armor displays, especially Palladium suits.
 
 Repository: `PunctualBoat203/HeroStand`  
+Author: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
 Current test build: **0.1.18**
