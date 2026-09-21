@@ -1,6 +1,7 @@
 package com.herostand;
 
 import com.herostand.config.HeroStandClientConfig;
+import com.herostand.config.HeroStandServerConfig;
 import com.herostand.registry.ModBlockEntities;
 import com.herostand.registry.ModBlocks;
 import com.herostand.registry.ModCreativeTabs;
@@ -26,6 +27,11 @@ public final class HeroStand {
                 ModConfig.Type.CLIENT,
                 HeroStandClientConfig.SPEC,
                 "herostand-client.toml"
+        );
+        ModLoadingContext.get().registerConfig(
+                ModConfig.Type.SERVER,
+                HeroStandServerConfig.SPEC,
+                "herostand-server.toml"
         );
     }
 }
