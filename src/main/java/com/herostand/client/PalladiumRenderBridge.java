@@ -541,7 +541,7 @@ final class PalladiumRenderBridge {
         return supported;
     }
 
-    private void ensureArmorContexts(ArmorStand entity) throws Exception {
+    private void ensureArmorContexts(ArmorStand entity) throws Throwable {
         if (cachedContextEntity == entity) return;
 
         cachedContextEntity = entity;
