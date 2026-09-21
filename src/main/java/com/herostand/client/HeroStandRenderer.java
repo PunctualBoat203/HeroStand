@@ -114,18 +114,31 @@ public final class HeroStandRenderer
                         palladium.prepareContext(stand, level);
 
                 if (suitContext != null) {
+                    long gameTime = level.getGameTime();
+
+                    // Hot path: once a suit snapshot exists, do not run reflective Palladium
+                    // compatibility/model inspection again every frame.
+                    if (snapshots.renderCached(
+                            suitContext,
+                            packedLight,
+                            gameTime,
+                            poseStack)) {
+                        return;
+                    }
+
                     if (palladium.isSnapshotSafe(suitContext)) {
                         boolean snapshotDrawn =
                                 snapshots.renderOrBuild(
                                         suitContext,
                                         packedLight,
-                                        level.getGameTime(),
+                                        gameTime,
                                         poseStack,
                                         (localPose, captureSource) ->
                                                 minecraft
                                                         .getEntityRenderDispatcher()
                                                         .render(
                                                                 suitContext,
+                                                                0.0D,
                                                                 0.0D,
                                                                 0.0D,
                                                                 0.0D,
