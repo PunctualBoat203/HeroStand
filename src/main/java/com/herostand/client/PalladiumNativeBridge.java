@@ -273,8 +273,13 @@ final class PalladiumNativeBridge {
     }
 
     /**
-     * Conservative snapshot policy. Known static Palladium layer types can be captured. Thrusters,
-     * lightning, unknown/custom layer classes, and models with ExtraAnimatedModel stay live.
+     * Cheap known-dynamic preflight only.
+     *
+     * 0.2.1 proved that treating every unknown/add-on layer class as unsafe rejected the entire
+     * real-world suit wall. 0.2.2 therefore rejects only behavior we positively know is animated
+     * (thrusters, lightning, ExtraAnimatedModel). Unknown/custom layers are allowed to attempt a
+     * native capture; StaticSuitSnapshotCache then performs a two-time-sample stability check on
+     * the actual emitted render data before accepting the snapshot.
      */
     boolean isSnapshotSafe(ArmorStand suitStand) {
         if (!isInstalled() || suitStand == null) return false;
@@ -376,8 +381,13 @@ final class PalladiumNativeBridge {
             }
         }
 
-        // Add-on/custom layer classes can perform direct GL work or depend on game time.
-        return false;
+        /*
+         * Unknown/add-on layers are not automatically dynamic. Palladium explicitly supports
+         * third-party render-layer parsers, and many add-on layers are just static model/texture
+         * wrappers. Let the native capture + stability comparison prove whether their emitted
+         * output is stable instead of rejecting them by Java class name.
+         */
+        return true;
     }
 
     private RendererInfo rendererFor(Item item) throws Exception {
