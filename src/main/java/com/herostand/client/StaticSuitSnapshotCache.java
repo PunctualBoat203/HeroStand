@@ -313,7 +313,7 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
                  * reusable local-space VBO. If it still needs sorting after alpha classification,
                  * keep this suit on Palladium's live renderer.
                  */
-                if (drawType.sortOnUpload()) {
+                if (resolver.requiresSorting(drawType)) {
                     safe = false;
                     return false;
                 }
