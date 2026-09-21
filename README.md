@@ -8,11 +8,15 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.1**
+Current test build: **0.2.2**
 
 ## IMPORTANT — current development line
 
 Active renderer rebuild branch:
+
+`rebuild/0.2.2-stable-snapshot`
+
+0.2.1 diagnostics branch:
 
 `rebuild/0.2.1-cache-diagnostics`
 
@@ -31,7 +35,8 @@ Known reference points:
 - **0.1.18**: roughly 49 FPS / 63% GPU / 476 MiB/s allocation in the mixed-suit wall.
 - **0.1.19**: no meaningful improvement and may have been worse.
 - **0.2.0**: clean renderer reset; user test was a very stable **49–50 FPS**, about **79% GPU**, and about **511 MiB/s allocation** at the mixed-suit wall.
-- **0.2.1**: cache-hot-path correction + F3 diagnostics to measure whether complete suit snapshots are actually being used.
+- **0.2.1**: cache-hot-path correction + F3 diagnostics. User test proved the snapshot cache was being used **0.0%** of the time.
+- **0.2.2**: removes the over-conservative unknown-layer rejection and proves snapshot stability by comparing two native Palladium captures at different animation times.
 
 Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
 
@@ -108,12 +113,14 @@ Facing is applied outside the snapshot, so north/east/south/west stands do not r
 HeroStand refuses to snapshot visuals that are not proven safe.
 
 These stay on Palladium's live native renderer:
-- thruster layers;
-- lightning-spark layers;
-- unknown/custom render-layer classes;
+- known thruster layers;
+- known lightning-spark layers;
 - ExtraAnimatedModel armor/layer models;
 - textures/layers that still require true partial-alpha translucent sorting;
-- any snapshot build that fails or cannot be classified safely.
+- any candidate whose native emitted output changes across the 0.2.2 two-time-sample stability test;
+- any snapshot build that fails.
+
+Important 0.2.2 correction: **unknown/custom render-layer classes are no longer rejected merely because HeroStand does not recognize their Java class name.** Palladium explicitly supports third-party render-layer parsers. Unknown/add-on layers may attempt capture and must prove their actual emitted output is stable before the snapshot is accepted.
 
 This is intentional. Visual correctness wins over cache coverage.
 
@@ -203,6 +210,65 @@ How to interpret it:
 - **High defer during initial warmup only** is normal because builds are intentionally throttled.
 - Allocation should drop materially once snapshot hits dominate; if it does not, inspect work performed outside the suit renderer.
 
+## 0.2.1 measured result — definitive cache miss diagnosis
+
+The first F3 diagnostic test finally identified why the 0.2 snapshot architecture had not improved FPS.
+
+User screenshot at the mixed-suit wall showed approximately:
+- **47 FPS**
+- **77% GPU**
+- approximately **501 MiB/s allocation**
+- `snap 0.0%`
+- `0 hit / 0 built`
+- `live=163672`
+- `blocked=163619`
+- `safetyReject=53`
+
+The arithmetic is decisive: the 53 visible HeroStands were each safety-rejected, then almost every later render went through the 30-second blocked/live fallback. The complete suit snapshot cache was doing **zero useful work**.
+
+The mistake was HeroStand's pre-cache policy, not the cache replay implementation: it assumed an unknown/add-on Palladium render-layer class was unsafe. That is incompatible with real Palladium add-on ecosystems where custom static layer implementations are normal.
+
+## 0.2.2 stable-output snapshot policy
+
+0.2.2 changes the safety model from **class-name trust** to **observed render-output stability**.
+
+Preflight now rejects only behavior HeroStand positively knows is time-varying:
+- Palladium thruster layers;
+- Palladium lightning-spark layers;
+- armor/layer models implementing `ExtraAnimatedModel`.
+
+Unknown/add-on/custom layer classes are allowed to attempt a snapshot.
+
+For every candidate snapshot, HeroStand renders the real Palladium SuitStand twice:
+1. first native capture at the current entity tick with partial tick 0.0;
+2. second native capture at entity tick + 7 with partial tick 0.5.
+
+During both captures HeroStand hashes:
+- emitted vertex positions;
+- vertex colors/alpha;
+- UV coordinates;
+- overlay coordinates;
+- packed light coordinates;
+- normals;
+- vertex count;
+- resolved RenderType/texture identity;
+- whether partial vertex alpha was emitted.
+
+The snapshot is accepted only when:
+- both captures are render-type safe;
+- neither still needs camera-relative translucent sorting;
+- both complete emitted signatures match exactly.
+
+If they differ, the suit remains on Palladium's native live renderer. This catches time-varying custom layers without needing HeroStand to know the add-on's Java classes.
+
+This deliberately targets the real 0.2.1 failure: static third-party layers should finally enter the snapshot cache, while genuinely animated output remains live.
+
+The F3 line is shortened in 0.2.2 so the useful fields fit on screen:
+
+`HeroStand 0.2.2 snap=... hit=... build=... live=... dyn=... cap=... cache=...`
+
+For the same wall, the key success signal is no longer just FPS. First verify that `snap` climbs substantially above 0% and `cache` becomes nonzero. Only then does the snapshot architecture deserve an FPS comparison.
+
 ## Distance and wall occlusion
 
 0.2.0 intentionally keeps the known 0.1.9 culling behavior separate from the visual renderer.
@@ -233,7 +299,7 @@ In particular, the old manual `PalladiumRenderBridge` was removed from the 0.2.0
 
 Do not re-add the old GPU-vendor router, partial base-only VBO cache, fast manual model emitter, or layered renderer experiments unless a specific measured reason justifies doing so.
 
-## 0.2.1 validation priorities
+## 0.2.2 validation priorities
 
 Test in this order:
 
@@ -295,7 +361,12 @@ Before handing over a JAR:
 4. validate the artifact/JAR contents;
 5. do not silently substitute a stale `main` build.
 
-0.2.1 Actions reference:
+0.2.2 Actions reference:
+- branch: `rebuild/0.2.2-stable-snapshot`
+- successful build: **run #87**
+- build commit: `614b76f803bae429fafd8ee051a58378f6905bc4`
+
+0.2.1 reference:
 - branch: `rebuild/0.2.1-cache-diagnostics`
 - successful build: **run #84**
 - build commit: `0bb878d8b5b4df4c0fbd17275f258f9f042dcec8`
