@@ -1,123 +1,43 @@
 package com.herostand.client;
 
-import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.resources.ResourceLocation;
-
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.Optional;
 
 /**
- * Chooses a snapshot-safe draw RenderType.
+ * Stable RenderType policy for cached Palladium base armor.
  *
- * Palladium's base armor and its nominal "solid" pack layer can use blended translucent
- * RenderTypes. If both the texture alpha and emitted vertex alpha prove the geometry is binary,
- * HeroStand can use vanilla cutout/no-cull rendering instead. True translucency is never cached in
- * the 0.2 snapshot path because camera-relative translucent sorting would become stale.
+ * Do not reflect private Minecraft field names here. In the user's Forge/SRG runtime the old
+ * sortOnUpload reflection could fail and falsely classify Palladium's base armor as sorted.
  */
 final class SnapshotRenderTypeResolver {
     private static final String PALLADIUM_ARMOR =
             "palladium:armor_cutout_no_cull_transparency";
-    private static final String ENTITY_TRANSLUCENT = "entity_translucent";
-
-    private final TextureAlphaClassifier alphaClassifier = new TextureAlphaClassifier();
-
-    private final Field nameField;
-    private final Field sortOnUploadField;
-    private final Field stateField;
-    private final Field textureStateField;
-    private final Method cutoutTextureMethod;
-
-    SnapshotRenderTypeResolver() {
-        Field name = null;
-        Field sortOnUpload = null;
-        Field state = null;
-        Field texture = null;
-        Method cutout = null;
-
-        try {
-            name = RenderStateShard.class.getDeclaredField("name");
-            name.setAccessible(true);
-
-            sortOnUpload = RenderType.class.getDeclaredField("sortOnUpload");
-            sortOnUpload.setAccessible(true);
-
-            Class<?> compositeType =
-                    Class.forName("net.minecraft.client.renderer.RenderType$CompositeRenderType");
-            state = compositeType.getDeclaredField("state");
-            state.setAccessible(true);
-
-            Class<?> compositeState =
-                    Class.forName("net.minecraft.client.renderer.RenderType$CompositeState");
-            texture = compositeState.getDeclaredField("textureState");
-            texture.setAccessible(true);
-
-            Class<?> emptyTexture =
-                    Class.forName("net.minecraft.client.renderer.RenderStateShard$EmptyTextureStateShard");
-            cutout = emptyTexture.getDeclaredMethod("cutoutTexture");
-            cutout.setAccessible(true);
-        } catch (Throwable ignored) {
-        }
-
-        this.nameField = name;
-        this.sortOnUploadField = sortOnUpload;
-        this.stateField = state;
-        this.textureStateField = texture;
-        this.cutoutTextureMethod = cutout;
-    }
 
     RenderType resolve(RenderType original, boolean partialVertexAlpha) {
-        if (partialVertexAlpha) return original;
-        if (nameField == null || stateField == null
-                || textureStateField == null || cutoutTextureMethod == null) {
-            return original;
-        }
-
-        try {
-            String name = (String) nameField.get(original);
-            if (!PALLADIUM_ARMOR.equals(name) && !ENTITY_TRANSLUCENT.equals(name)) {
-                return original;
-            }
-
-            Optional<ResourceLocation> texture = textureOf(original);
-            if (texture.isEmpty()
-                    || alphaClassifier.classify(texture.get())
-                    != TextureAlphaClassifier.AlphaMode.BINARY) {
-                return original;
-            }
-
-            if (PALLADIUM_ARMOR.equals(name)) {
-                return RenderType.armorCutoutNoCull(texture.get());
-            }
-
-            return RenderType.entityCutoutNoCull(texture.get());
-        } catch (Throwable ignored) {
-            return original;
-        }
+        return original;
     }
 
     boolean requiresSorting(RenderType renderType) {
-        if (sortOnUploadField == null) return true;
+        String name = renderType.toString().toLowerCase(java.util.Locale.ROOT);
 
-        try {
-            return sortOnUploadField.getBoolean(renderType);
-        } catch (Throwable ignored) {
+        // Palladium creates this RenderType with sortOnUpload=false.
+        if (name.contains(PALLADIUM_ARMOR)) {
+            return false;
+        }
+
+        // HeroStand 0.2.6 snapshots only the native HumanoidArmorLayer. Glint/cutout armor
+        // RenderTypes are not camera-sorted. Anything explicitly translucent/effect-like stays live.
+        if (name.contains("translucent")
+                || name.contains("glowing")
+                || name.contains("energy_swirl")
+                || name.contains("laser")
+                || name.contains("lightning")
+                || name.contains("beacon_beam")) {
             return true;
         }
+
+        return false;
     }
 
     void clear() {
-        alphaClassifier.clear();
-    }
-
-    private Optional<ResourceLocation> textureOf(RenderType renderType) throws Exception {
-        Object state = stateField.get(renderType);
-        Object textureState = textureStateField.get(state);
-
-        @SuppressWarnings("unchecked")
-        Optional<ResourceLocation> texture =
-                (Optional<ResourceLocation>) cutoutTextureMethod.invoke(textureState);
-        return texture;
     }
 }
