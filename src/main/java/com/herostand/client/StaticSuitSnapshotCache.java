@@ -41,7 +41,7 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
     }
     private static final int MAX_ENTRIES = 192;
     private static final int MAX_LIGHT_VARIANTS_PER_SUIT = 4;
-    private static final int MAX_BUILDS_PER_TICK = 2;
+    private static final int MAX_BUILDS_PER_TICK = 1;
     private static final long IDLE_TIMEOUT_TICKS = 20L * 120L;
     private static final long SWEEP_INTERVAL_TICKS = 20L * 5L;
     private static final long RETRY_UNCACHEABLE_TICKS = 20L * 30L;
