@@ -1,5 +1,6 @@
 package com.herostand.client;
 
+import com.herostand.world.HeroStandBlockEntity;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -33,6 +34,11 @@ import java.util.Map;
  * suit remains on Palladium's live renderer.
  */
 final class StaticSuitSnapshotCache implements AutoCloseable {
+    enum BuildResult {
+        DRAWN,
+        DEFERRED,
+        REJECTED
+    }
     private static final int MAX_ENTRIES = 192;
     private static final int MAX_LIGHT_VARIANTS_PER_SUIT = 4;
     private static final int MAX_BUILDS_PER_TICK = 2;
@@ -56,14 +62,14 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
      * Fast path used every frame. It performs only the compact suit/light key lookup and never
      * touches Palladium reflection/model inspection.
      */
-    boolean renderCached(ArmorStand suitStand,
+    boolean renderCached(HeroStandBlockEntity stand,
                          int packedLight,
                          long gameTime,
                          PoseStack worldPose) {
         sweep(gameTime);
 
         CacheKey key =
-                new CacheKey(SuitIdentity.from(suitStand), packedLight);
+                new CacheKey(SuitIdentity.from(stand), packedLight);
         Snapshot cached = snapshots.get(key);
         if (cached == null) return false;
 
@@ -77,37 +83,38 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
      *
      * @return true when a cached/new snapshot was drawn; false means caller should live-render.
      */
-    boolean renderOrBuild(ArmorStand suitStand,
-                          int packedLight,
-                          long gameTime,
-                          PoseStack worldPose,
-                          SnapshotRenderer renderer) {
+    BuildResult renderOrBuild(HeroStandBlockEntity stand,
+                              ArmorStand suitStand,
+                              int packedLight,
+                              long gameTime,
+                              PoseStack worldPose,
+                              SnapshotRenderer renderer) {
         sweep(gameTime);
 
-        SuitIdentity suit = SuitIdentity.from(suitStand);
+        SuitIdentity suit = SuitIdentity.from(stand);
         CacheKey key = new CacheKey(suit, packedLight);
 
         Snapshot cached = snapshots.get(key);
         if (cached != null) {
             cached.lastUsedTick = gameTime;
             cached.draw(worldPose);
-            return true;
+            return BuildResult.DRAWN;
         }
 
         Long blockedUntil = uncacheableUntil.get(suit);
         if (blockedUntil != null) {
-            if (gameTime < blockedUntil) return false;
+            if (gameTime < blockedUntil) return BuildResult.DEFERRED;
             uncacheableUntil.remove(suit);
         }
 
         if (!consumeBuildBudget(gameTime)) {
-            return false;
+            return BuildResult.DEFERRED;
         }
 
         Snapshot built = build(renderer, gameTime);
         if (built == null) {
             rememberUncacheable(suit, gameTime);
-            return false;
+            return BuildResult.REJECTED;
         }
 
         trimLightVariantsBeforeInsert(suit);
@@ -115,7 +122,24 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
         evictGlobalIfNeeded();
 
         built.draw(worldPose);
-        return true;
+        return BuildResult.DRAWN;
+    }
+
+    boolean shouldAttemptBuild(HeroStandBlockEntity stand, long gameTime) {
+        SuitIdentity suit = SuitIdentity.from(stand);
+        Long blockedUntil = uncacheableUntil.get(suit);
+
+        if (blockedUntil == null) return true;
+        if (gameTime >= blockedUntil) {
+            uncacheableUntil.remove(suit);
+            return true;
+        }
+
+        return false;
+    }
+
+    void markUncacheable(HeroStandBlockEntity stand, long gameTime) {
+        rememberUncacheable(SuitIdentity.from(stand), gameTime);
     }
 
     void tick(long gameTime) {
@@ -539,6 +563,15 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             long legs,
             long feet
     ) {
+        static SuitIdentity from(HeroStandBlockEntity stand) {
+            return new SuitIdentity(
+                    fingerprint(stand.getArmor(HeroStandBlockEntity.HEAD)),
+                    fingerprint(stand.getArmor(HeroStandBlockEntity.CHEST)),
+                    fingerprint(stand.getArmor(HeroStandBlockEntity.LEGS)),
+                    fingerprint(stand.getArmor(HeroStandBlockEntity.FEET))
+            );
+        }
+
         static SuitIdentity from(ArmorStand stand) {
             return new SuitIdentity(
                     fingerprint(stand.getItemBySlot(EquipmentSlot.HEAD)),
