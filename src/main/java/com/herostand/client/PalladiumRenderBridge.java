@@ -679,13 +679,22 @@ final class PalladiumRenderBridge {
                                     float red, float green, float blue) {
         VertexConsumer consumer =
                 ItemRenderer.getArmorFoilBuffer(buffers, renderType, false, foil);
-        model.renderToBuffer(
+        if (!FastHumanoidModelRenderer.render(
+                model,
                 poseStack,
                 consumer,
                 packedLight,
                 OverlayTexture.NO_OVERLAY,
                 red, green, blue, 1.0F
-        );
+        )) {
+            model.renderToBuffer(
+                    poseStack,
+                    consumer,
+                    packedLight,
+                    OverlayTexture.NO_OVERLAY,
+                    red, green, blue, 1.0F
+            );
+        }
     }
 
     @SuppressWarnings("rawtypes")
