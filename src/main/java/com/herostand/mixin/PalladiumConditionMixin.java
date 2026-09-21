@@ -50,6 +50,7 @@ public abstract class PalladiumConditionMixin {
         if (active instanceof DataContext reusable
                 && reusable.getEntity() == living) {
             context = reusable;
+            PalladiumConditionContext.noteHeroStandGeckoRender();
             PalladiumConditionContext.noteReuse(
                     bothConditions.size() + thirdPersonConditions.size());
         } else {
