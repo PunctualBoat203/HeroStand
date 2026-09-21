@@ -8,11 +8,15 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.4**
+Current test build: **0.2.5**
 
 ## IMPORTANT — current development line
 
 Active renderer rebuild branch:
+
+`rebuild/0.2.5-translucent-index-cache`
+
+0.2.4 direct-capture diagnostics branch:
 
 `rebuild/0.2.4-direct-capture-diag`
 
@@ -46,7 +50,8 @@ Known reference points:
 - **0.2.1**: cache-hot-path correction + F3 diagnostics. User test proved the snapshot cache was being used **0.0%** of the time.
 - **0.2.2**: unknown-layer rejection was removed, but the user's F3 test still showed **0.0% snapshot usage**, **cache=0**, **cap=106**, about **48 FPS / 83% GPU**, and it introduced visible sky flicker. The two-pass capture/sorting-rejection design is therefore abandoned.
 - **0.2.3**: finally produced a snapshot, but only **1 cached entry / ~1.9% snapshot usage** in the wall test. User still saw roughly **46–48 FPS**, **~81% GPU**, and a new top-of-screen flicker/artifact. F3 showed **cap=133 / cache=1**, so nearly every candidate still failed capture.
-- **0.2.4**: stabilization + diagnostics. Captures Palladium's renderer directly instead of recursively calling EntityRenderDispatcher, reads runtime Palladium texture alpha from the already-uploaded OpenGL texture when no ResourceManager file exists, refuses to freeze genuinely sorted/translucent output, and reports the last rejection reason on F3 as `why=...`.
+- **0.2.4**: direct renderer capture + rejection diagnostics. User test still showed **0.0% snapshot usage / cache=0 / cap=101**, with `why=sorted:RenderType[palladium:arm...]`. Performance remained about **51 FPS / 79% GPU / ~521 MiB/s allocation**. The black/flickering top-of-screen artifact also remained even with zero cached snapshots, strongly implicating the runtime OpenGL texture-readback experiment rather than snapshot replay.
+- **0.2.5**: removes all runtime `glGetTexImage`/texture-binding inspection and implements Minecraft-style cached translucent geometry: vertices are uploaded once, `BufferBuilder.SortState` is retained, and only the translucent index order is regenerated/re-uploaded for the current camera before each draw.
 
 Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
 
@@ -126,26 +131,34 @@ These stay on Palladium's live native renderer:
 - known thruster layers;
 - known lightning-spark layers;
 - ExtraAnimatedModel armor/layer models;
-- textures/layers that still require true partial-alpha translucent sorting;
+- any capture path that performs unsupported/non-buffered behavior;
 - any snapshot build that fails.
+
+Important 0.2.5 correction: a RenderType requiring camera-relative translucent sorting is **no longer automatically live-only**. Static translucent geometry can be cached while its index order is re-sorted for the current camera.
 
 Important correction: **unknown/custom render-layer classes are no longer rejected merely because HeroStand does not recognize their Java class name.** Palladium explicitly supports third-party render-layer parsers. Unknown/add-on layers may attempt native capture; known animated behavior remains live.
 
 This is intentional. Visual correctness wins over cache coverage.
 
-### Alpha handling
+### Alpha / translucent handling
 
-Palladium commonly uses blended translucent RenderTypes even for armor textures that are effectively cutout/opaque.
+Palladium commonly uses sorted translucent RenderTypes for base armor, including runtime/generated textures.
 
-For snapshot capture only:
-- static texture resources are scanned once;
-- textures containing only alpha 0 or 255 may use vanilla cutout/no-cull rendering;
-- any alpha value 1–254 remains truly translucent;
-- generated/dynamic textures first try normal resource bytes;
-- if a Palladium runtime texture has no ResourceManager file, 0.2.4 may read mip 0 from the already-uploaded OpenGL texture once and inspect the actual alpha bytes;
-- runtime textures that still cannot be proven binary remain live.
+0.2.4 attempted to inspect runtime OpenGL texture pixels with `glGetTexImage`. The user still had **cache=0**, while the screen developed a black/flickering top artifact. That GL readback path is removed completely in 0.2.5.
 
-True camera-relative translucent/sorted geometry is not stored in a reusable snapshot. This is specifically to avoid the top-of-screen artifact observed when 0.2.3 reused a once-sorted translucent snapshot.
+0.2.5 follows Minecraft's own translucent chunk strategy instead:
+- ordinary resource-pack textures may still be classified as binary-alpha and converted to cutout/no-cull when safely provable;
+- runtime/generated Palladium textures are **not** rebound/read from OpenGL;
+- if a captured RenderType still requests sorting, HeroStand keeps the original translucent RenderType;
+- the captured vertex geometry is uploaded once;
+- the original `BufferBuilder.SortState` / quad centers are retained;
+- before drawing a cached stand, HeroStand computes the camera position in that stand's local coordinates;
+- only the translucent **index order** is regenerated with `VertexSorting.byDistance(...)`;
+- the resulting index-only buffer is uploaded to the existing VBO; vertex data/model geometry is not rebuilt.
+
+This is specifically intended to avoid both previous failure modes:
+1. rejecting every Palladium armor snapshot just because its RenderType is sorted; and
+2. freezing one stale translucent sort order, which produced visible artifacts.
 
 ### Snapshot lifecycle / VRAM limits
 
@@ -454,32 +467,58 @@ For future performance work:
 - prefer simple architecture over accumulating renderer hacks.
 
 
-## 0.2.4 direct capture / runtime texture alpha diagnostics
+## 0.2.4 direct capture / rejection diagnostics
 
-0.2.3 user test:
-- approximately **46 FPS**
-- approximately **81% GPU**
-- F3: **snap ~1.9%**, **cache=1**, **cap=133**
-- visible intermittent artifact/flicker near the top of the screen
+0.2.4 captured Palladium's actual renderer directly and added `why=<reason>` to F3.
 
-Interpretation:
-- snapshot rendering finally executed, but only one entry actually survived capture;
-- almost all candidates still failed;
-- the artifact appeared only after sorted/translucent snapshot replay became possible, so that replay path is considered unsafe.
+PunctualBoat's wall test showed:
+- about **51 FPS**;
+- about **79% GPU**;
+- about **521 MiB/s allocation**;
+- `snap=0.0%`;
+- `hit=0`;
+- `build=0`;
+- `live=258616`;
+- `dyn=0`;
+- `cap=101`;
+- `cache=0`;
+- `why=sorted:RenderType[palladium:arm...]`.
 
-0.2.4 changes:
-- snapshot capture calls Palladium's actual renderer directly via `EntityRenderDispatcher.getRenderer(...).render(...)` rather than recursively invoking the dispatcher;
-- dispatcher/world extras are not part of reusable snapshot capture;
-- runtime Palladium textures can be alpha-classified from their uploaded OpenGL texture when no normal resource file exists;
-- only proven binary-alpha runtime textures may be converted to cutout/no-cull;
-- any RenderType that still requires camera-relative sorting is rejected from the snapshot cache and stays live;
-- no upload-time frozen translucent sorting is used;
-- F3 now includes `why=<reason>`, exposing the most recent snapshot rejection such as sorted RenderType, empty capture, or the underlying exception type/message;
-- author / owner remains **PunctualBoat**.
+This proves the remaining cache blocker is Palladium's base armor RenderType being sorted/translucent, not the old dynamic-layer safety classifier.
 
-Validation:
-- verify the previous top-of-screen artifact is gone;
-- face the same mixed-suit wall for several seconds;
-- record the full HeroStand F3 line, especially `snap`, `build`, `live`, `cap`, `cache`, and `why`;
-- if `why` reports a sorted RenderType, the next optimization target is that specific Palladium texture/layer;
-- if `why` reports an exception, fix that exact capture path before making further performance assumptions.
+The same test still showed the black/flickering artifact at the top of the screen even though `cache=0`. Therefore the artifact cannot be caused by replaying a cached VBO. The runtime OpenGL texture-readback/binding experiment introduced in 0.2.4 is treated as the regression source and is removed in 0.2.5.
+
+## 0.2.5 translucent index cache
+
+0.2.5 changes the cache model instead of trying to force Palladium's runtime armor textures into cutout rendering.
+
+For sorted/translucent captured geometry:
+- capture the native Palladium suit geometry once;
+- call `BufferBuilder.setQuadSorting(...)` at capture time and keep its `SortState`;
+- upload vertex geometry once into a GPU `VertexBuffer`;
+- use a dynamic index buffer for sorted parts;
+- on each cached draw, transform the camera into the stand's local coordinates;
+- restore the saved `SortState`;
+- regenerate only sorted quad indices with `VertexSorting.byDistance(...)`;
+- upload the index-only `RenderedBuffer` to the existing VertexBuffer;
+- then draw with Palladium's original RenderType.
+
+This mirrors Minecraft 1.20.1's translucent chunk re-sort approach: geometry stays resident while camera-dependent index order changes.
+
+0.2.5 also:
+- removes all runtime `glGetTexImage` calls;
+- does not manually bind/read Palladium's uploaded textures;
+- keeps direct `SuitStandRenderer` capture rather than recursive EntityRenderDispatcher capture;
+- keeps known thruster/lightning/ExtraAnimatedModel behavior live;
+- preserves the pre-Palladium ItemStack snapshot lookup hot path;
+- preserves distance culling and cached wall occlusion;
+- keeps author / owner metadata as **PunctualBoat**.
+
+Validation priorities:
+1. confirm the black/top-screen flicker is gone;
+2. face the same mixed-suit wall for 10–20 seconds;
+3. verify `cache`, `build`, and then `hit` become nonzero and continue increasing;
+4. verify `snap` rises materially above the previous 0–1.9%;
+5. check transparent/glass suit layers while moving sideways so camera-dependent ordering can be observed;
+6. compare FPS, GPU%, and allocation only after snapshots have warmed.
+
