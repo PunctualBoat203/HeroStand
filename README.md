@@ -4,14 +4,18 @@
 HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero/modded armor displays, especially Palladium suits.
 
 Repository: `PunctualBoat203/HeroStand`  
+Author: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.18**
+Current test build: **0.1.19**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`render/0.1.19-fast-model`
+
+0.1.18 alpha-aware branch:
 `render/0.1.18-alpha-aware`
 
 0.1.17 batching / Mark One fix branch:
@@ -483,6 +487,56 @@ If 0.1.18 still leaves the mixed wall GPU-bound with little improvement, stop sp
 
 That is closer to how Minecraft's fast chunk/static geometry path works and avoids treating every static display as a fully dynamic entity renderer every frame.
 
+### 0.1.18 user result
+
+The user tested 0.1.18 at the same mixed-suit wall:
+- roughly **49 FPS**
+- roughly **63% GPU usage**
+- roughly **476 MiB/s allocation rate**
+
+The lower GPU utilization suggests alpha-aware rendering reduced some GPU pressure, but FPS remained effectively unchanged. The persistent ~476 MiB/s allocation rate points at Java/render-thread model emission as the next dominant bottleneck.
+
+## 0.1.19 allocation-free humanoid model pass
+
+A source-level review of Minecraft 1.20.1's vanilla `ModelPart` renderer identified a major allocation source:
+- every `PoseStack.pushPose()` creates a new Pose + Matrix4f + Matrix3f
+- rotated model parts construct Quaternionf objects
+- polygon normal transforms create Vector3f objects
+- **every rendered model vertex creates a Vector4f**
+- complex superhero models multiply this across many cubes, parts, suits, stands, and frames
+
+0.1.19 introduces `FastHumanoidModelRenderer` for compatible adult HumanoidModels:
+- extracts immutable ModelPart cube/polygon/UV data once per ModelPart identity
+- reuses preallocated Matrix4f/Matrix3f/Quaternionf/Vector3f/Vector4f scratch objects
+- reproduces ModelPart translation/rotation/scale transforms without per-part/per-vertex object allocation
+- falls back to the original model renderer for model classes that override `renderToBuffer()`
+- remains disabled for native-only/custom render-layer cases that HeroStand cannot safely reproduce
+
+A second source review corrected the Mark One diagnosis:
+- custom Palladium armor ModelLayerLocations are **not inherently native-only**
+- Palladium's own armor mixin supports custom HumanoidModels normally
+- HeroStand's manual parent model had `EntityModel.young` left at its default `true`
+- LivingEntityRenderer normally updates this flag before entity rendering, but HeroStand's manual renderer bypassed that step
+- the resulting child-model scaling closely matches Mark One's old **small chest/legs/boots + separately scaled head** symptom
+
+0.1.19 therefore:
+- explicitly pins the HeroStand parent/armor models to `young=false`
+- stops forcing custom humanoid armor model layers through the full native SuitStandRenderer
+- keeps unknown/custom render-layer semantics on the native fallback
+- uses HeroStand's reusable Palladium DataContexts for direct base armor again
+- uses the static Palladium layer accelerator for supported pack/skin/compound layers
+- uses the allocation-free humanoid emitter in direct armor and supported static layer rendering
+- preserves 0.1.18 alpha-aware cutout/translucency handling
+- preserves 0.1.17 per-RenderType batching
+- preserves distance and wall occlusion
+
+0.1.19 validation:
+- Confirm **Mark One remains visually fixed** despite no longer being forced native just for its custom base armor model.
+- Repeat the same mixed-suit wall and compare FPS + GPU% + allocation rate against 0.1.18's ~49 FPS / 63% GPU / 476 MiB/s.
+- Allocation rate is the primary signal: if the fast model path is hitting the expected suits, it should drop materially.
+- Check several custom suits for missing top-level/custom model geometry; models overriding `renderToBuffer` must remain on their original path.
+- Verify transparent/glowing/thruster suits and distance/wall culling remain correct.
+
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
 - Skips rendering when the stand has no armor.
@@ -535,7 +589,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.17 results, and current 0.1.18 alpha-aware build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.18 results, and current 0.1.19 fast-model build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -560,7 +614,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `render/0.1.18-alpha-aware` for the current test artifact; keep `render/0.1.17-batch-first-native-compat` as the Mark One-fixed batching comparison, `render/0.1.16-cache-lifecycle` as the no-gain VBO/cache comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
+3. Use `render/0.1.19-fast-model` for the current test artifact; keep `render/0.1.18-alpha-aware` as the lower-GPU/no-FPS-gain comparison, `render/0.1.17-batch-first-native-compat` as the Mark One-fixed batching comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
