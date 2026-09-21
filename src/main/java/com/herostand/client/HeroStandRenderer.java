@@ -8,6 +8,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.ArmorStandArmorModel;
+import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
@@ -59,10 +60,20 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
             new Vec3(0.50D, 1.20D, 0.78D)
     };
 
-    private final ArmorStandArmorModel parentModel;
+    /**
+     * Palladium's real SuitStandRenderer uses a normal HumanoidModel-shaped parent, not
+     * ArmorStandArmorModel. That distinction matters for custom suit models because
+     * HumanoidModel.copyPropertiesTo(...) copies part positions as well as rotations.
+     *
+     * ArmorStandArmorModel offsets the head to Y=1 and the legs to Y=11, while Palladium's
+     * SuitStandBasePlateModel uses normal humanoid positions (head Y=0, legs Y=12). Most armor
+     * tolerates that difference, but some custom helmet/model layers amplify it into visibly
+     * detached geometry. Use a standard humanoid parent to mirror Palladium's suit stand.
+     */
+    private final HumanoidModel<ArmorStand> parentModel;
     private final ArmorStandArmorModel innerArmorModel;
     private final ArmorStandArmorModel outerArmorModel;
-    private final HumanoidArmorLayer<ArmorStand, ArmorStandArmorModel, ArmorStandArmorModel> armorLayer;
+    private final HumanoidArmorLayer<ArmorStand, HumanoidModel<ArmorStand>, ArmorStandArmorModel> armorLayer;
     private final PalladiumRenderBridge palladium = new PalladiumRenderBridge();
 
     private final Map<Long, OcclusionEntry> occlusionCache = new HashMap<>();
@@ -72,12 +83,14 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     private ArmorStand fallbackRenderContext;
 
     public HeroStandRenderer(BlockEntityRendererProvider.Context context) {
-        this.parentModel = new ArmorStandArmorModel(context.bakeLayer(ModelLayers.ARMOR_STAND));
+        // ModelLayers.PLAYER has the same normal humanoid pivots Palladium's
+        // SuitStandBasePlateModel is built from, without requiring a hard Palladium dependency.
+        this.parentModel = new HumanoidModel<>(context.bakeLayer(ModelLayers.PLAYER));
 
-        RenderLayerParent<ArmorStand, ArmorStandArmorModel> parent =
+        RenderLayerParent<ArmorStand, HumanoidModel<ArmorStand>> parent =
                 new RenderLayerParent<>() {
                     @Override
-                    public ArmorStandArmorModel getModel() {
+                    public HumanoidModel<ArmorStand> getModel() {
                         return parentModel;
                     }
 
@@ -184,8 +197,9 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
             fastRenderContext.setLeftLegPose(ZERO_POSE);
             fastRenderContext.setRightLegPose(ZERO_POSE);
 
-            // This model is static for every HeroStand fast-path render. Preparing it once avoids
-            // repeating ArmorStand pose setup for every visible stand on every frame.
+            // This standard humanoid parent mirrors Palladium's SuitStandBasePlateModel pivots.
+            // Prepare it once in a stable neutral pose; pack/custom armor models copy these
+            // positions and rotations during rendering.
             parentModel.prepareMobModel(fastRenderContext, 0.0F, 0.0F, 0.0F);
             parentModel.setupAnim(fastRenderContext, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
 
