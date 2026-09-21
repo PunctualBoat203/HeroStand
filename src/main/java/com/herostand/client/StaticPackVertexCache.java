@@ -49,6 +49,10 @@ final class StaticPackVertexCache {
     private final LinkedHashMap<LayerKey, Long> blockedUntil =
             new LinkedHashMap<>(64, 0.75F, true);
 
+    // Render thread only: reuse these on every cache hit instead of allocating per layer/frame.
+    private final Vector4f positionScratch = new Vector4f();
+    private final Vector3f normalScratch = new Vector3f();
+
     private long cachedBytes;
     private long buildTick = Long.MIN_VALUE;
     private int buildsThisTick;
@@ -62,7 +66,6 @@ final class StaticPackVertexCache {
                          long gameTime,
                          PoseStack outerPose,
                          MultiBufferSource buffers,
-                         Eligibility eligibility,
                          CaptureRenderer renderer) {
         sweep(gameTime);
 
@@ -70,7 +73,11 @@ final class StaticPackVertexCache {
         Entry cached = cache.get(key);
         if (cached != null) {
             cached.lastUsedTick = gameTime;
-            cached.layer.replay(outerPose, buffers);
+            cached.layer.replay(
+                    outerPose,
+                    buffers,
+                    positionScratch,
+                    normalScratch);
             return Result.HIT;
         }
 
@@ -87,11 +94,6 @@ final class StaticPackVertexCache {
         }
 
         try {
-            if (!eligibility.isEligible()) {
-                block(key, gameTime, "unsupported");
-                return Result.LIVE;
-            }
-
             CaptureSource firstSource = new CaptureSource();
             renderer.render(firstSource, 0, 0.0F);
             CapturedLayer first = firstSource.freeze();
@@ -120,7 +122,11 @@ final class StaticPackVertexCache {
             cachedBytes += first.bytes;
             trim();
 
-            first.replay(outerPose, buffers);
+            first.replay(
+                    outerPose,
+                    buffers,
+                    positionScratch,
+                    normalScratch);
             lastReason = "none";
             return Result.BUILT;
         } catch (Throwable failure) {
@@ -229,11 +235,6 @@ final class StaticPackVertexCache {
         message = message.replace('\n', ' ').replace('\r', ' ');
         if (message.length() > 28) message = message.substring(0, 28);
         return name + ":" + message;
-    }
-
-    @FunctionalInterface
-    interface Eligibility {
-        boolean isEligible() throws Throwable;
     }
 
     @FunctionalInterface
@@ -360,12 +361,12 @@ final class StaticPackVertexCache {
             return batches.isEmpty();
         }
 
-        void replay(PoseStack outerPose, MultiBufferSource buffers) {
+        void replay(PoseStack outerPose,
+                    MultiBufferSource buffers,
+                    Vector4f positionScratch,
+                    Vector3f normalScratch) {
             Matrix4f pose = outerPose.last().pose();
             Matrix3f normal = outerPose.last().normal();
-
-            Vector4f positionScratch = new Vector4f();
-            Vector3f normalScratch = new Vector3f();
 
             for (VertexBatch batch : batches) {
                 batch.replay(
