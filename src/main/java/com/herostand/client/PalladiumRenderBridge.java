@@ -32,14 +32,32 @@ final class PalladiumRenderBridge {
     private final Method getCachedArmorRenderer;
     private final Method getRenderLayers;
     private final Method forArmorInSlot;
+    private final Method dataContextWith;
     private final Method renderLayer;
+    private final Object itemContextType;
 
     /**
-     * Identity cache is intentional: Minecraft Items are registry singletons. Once a static
-     * display suit resolves its ArmorRendererData/layers, avoid repeating reflective lookups
-     * every frame. Cleared when the render world/context changes.
+     * Identity caches are intentional: Minecraft Items are registry singletons. Once a static
+     * display suit resolves its ArmorRendererData/layers or fast-path eligibility, avoid repeating
+     * reflective lookups every frame.
      */
     private final Map<Item, RendererCache> rendererCache = new IdentityHashMap<>();
+    private final Map<Item, Boolean> fastPathEligibility = new IdentityHashMap<>();
+
+    /**
+     * HeroStand reuses one client-only ArmorStand for the Palladium fast path. Palladium's
+     * DataContext.forArmorInSlot(...) allocates a DataContext + HashMap each call, so reuse one
+     * context per slot for that reusable entity and only replace the ITEM value each draw.
+     */
+    private ArmorStand cachedContextEntity;
+    private final Object[] armorContexts = new Object[ARMOR_SLOTS.length];
+
+    /**
+     * The stress case is many neighboring stands wearing the same suit. Remember the last item
+     * seen in each slot so the hot render loop can avoid even the identity-map lookup.
+     */
+    private final Item[] lastSlotItems = new Item[ARMOR_SLOTS.length];
+    private final RendererCache[] lastSlotRenderers = new RendererCache[ARMOR_SLOTS.length];
 
     PalladiumRenderBridge() {
         boolean present = ModList.get().isLoaded("palladium");
@@ -48,7 +66,9 @@ final class PalladiumRenderBridge {
         Method cached = null;
         Method layers = null;
         Method dataContext = null;
+        Method contextWith = null;
         Method layerRender = null;
+        Object itemType = null;
 
         if (present) {
             try {
@@ -58,6 +78,8 @@ final class PalladiumRenderBridge {
                         "net.threetag.palladium.client.renderer.item.armor.ArmorRendererData", false, loader);
                 Class<?> dataContextClass = Class.forName(
                         "net.threetag.palladium.util.context.DataContext", false, loader);
+                Class<?> dataContextTypeClass = Class.forName(
+                        "net.threetag.palladium.util.context.DataContextType", false, loader);
                 Class<?> renderLayerClass = Class.forName(
                         "net.threetag.palladium.client.renderer.renderlayer.IPackRenderLayer", false, loader);
 
@@ -65,6 +87,8 @@ final class PalladiumRenderBridge {
                 layers = rendererData.getMethod("getRenderLayers");
                 dataContext = dataContextClass.getMethod(
                         "forArmorInSlot", net.minecraft.world.entity.LivingEntity.class, EquipmentSlot.class);
+                contextWith = dataContextClass.getMethod("with", dataContextTypeClass, Object.class);
+                itemType = dataContextTypeClass.getField("ITEM").get(null);
                 layerRender = renderLayerClass.getMethod(
                         "render",
                         dataContextClass,
@@ -87,7 +111,9 @@ final class PalladiumRenderBridge {
         this.getCachedArmorRenderer = cached;
         this.getRenderLayers = layers;
         this.forArmorInSlot = dataContext;
+        this.dataContextWith = contextWith;
         this.renderLayer = layerRender;
+        this.itemContextType = itemType;
     }
 
     boolean canUseFastPath(HeroStandBlockEntity stand) {
@@ -100,9 +126,7 @@ final class PalladiumRenderBridge {
                 if (stack.isEmpty()) continue;
                 foundArmor = true;
 
-                Item item = stack.getItem();
-                if (!armorWithRendererClass.isInstance(item)) return false;
-                if (rendererFor(item) == null) return false;
+                if (!supportsFastPath(stack.getItem())) return false;
             }
             return foundArmor;
         } catch (Throwable ignored) {
@@ -120,14 +144,31 @@ final class PalladiumRenderBridge {
         if (!healthy) return;
 
         try {
-            for (EquipmentSlot slot : ARMOR_SLOTS) {
+            ensureArmorContexts(entity);
+
+            for (int i = 0; i < ARMOR_SLOTS.length; i++) {
+                EquipmentSlot slot = ARMOR_SLOTS[i];
                 ItemStack stack = entity.getItemBySlot(slot);
                 if (stack.isEmpty()) continue;
 
-                RendererCache cache = rendererFor(stack.getItem());
+                Item item = stack.getItem();
+                RendererCache cache;
+                if (lastSlotItems[i] == item) {
+                    cache = lastSlotRenderers[i];
+                } else {
+                    cache = rendererFor(item);
+                    lastSlotItems[i] = item;
+                    lastSlotRenderers[i] = cache;
+                }
+
                 if (cache == null || cache.layers.isEmpty()) continue;
 
-                Object context = forArmorInSlot.invoke(null, entity, slot);
+                Object context = armorContexts[i];
+
+                // DataContext is mutable. ENTITY/LEVEL/SLOT stay constant because this fast-path
+                // ArmorStand is reused; only ITEM needs to track the stand currently being drawn.
+                dataContextWith.invoke(context, itemContextType, stack);
+
                 for (Object layer : cache.layers) {
                     renderLayer.invoke(
                             layer, context, poseStack, buffers, parentModel, packedLight,
@@ -142,6 +183,34 @@ final class PalladiumRenderBridge {
 
     void resetSessionCache() {
         rendererCache.clear();
+        fastPathEligibility.clear();
+        cachedContextEntity = null;
+
+        for (int i = 0; i < ARMOR_SLOTS.length; i++) {
+            armorContexts[i] = null;
+            lastSlotItems[i] = null;
+            lastSlotRenderers[i] = null;
+        }
+    }
+
+    private boolean supportsFastPath(Item item) throws Exception {
+        Boolean cached = fastPathEligibility.get(item);
+        if (cached != null) return cached;
+
+        boolean supported = armorWithRendererClass.isInstance(item) && rendererFor(item) != null;
+        fastPathEligibility.put(item, supported);
+        return supported;
+    }
+
+    private void ensureArmorContexts(ArmorStand entity) throws Exception {
+        if (cachedContextEntity == entity) return;
+
+        cachedContextEntity = entity;
+        for (int i = 0; i < ARMOR_SLOTS.length; i++) {
+            armorContexts[i] = forArmorInSlot.invoke(null, entity, ARMOR_SLOTS[i]);
+            lastSlotItems[i] = null;
+            lastSlotRenderers[i] = null;
+        }
     }
 
     private RendererCache rendererFor(Item item) throws Exception {
@@ -164,7 +233,7 @@ final class PalladiumRenderBridge {
 
     private void disableFastPath() {
         healthy = false;
-        rendererCache.clear();
+        resetSessionCache();
     }
 
     private record RendererCache(Object renderer, List<?> layers) {}
