@@ -2,7 +2,7 @@ name: Build HeroStand
 
 on:
   push:
-    branches: [ "main", "rebuild/0.2.9-render-plan-cache" ]
+    branches: [ "main", "rebuild/0.2.9-render-plan-cache", "rebuild/0.2.10-gecko-profiler" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
