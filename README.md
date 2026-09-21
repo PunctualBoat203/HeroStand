@@ -171,9 +171,9 @@ Every actual layer still renders through Palladium/Gecko exactly once.
 
 0.2.9 includes an **optional Palladium client mixin**.
 
-During HeroStand's pack-layer pass, one entity-only Palladium `DataContext` is reused for repeated `conditionsFulfilled()` checks instead of constructing a new `DataContext + HashMap` for every condition.
+During HeroStand's pack-layer pass, one entity-only Palladium `DataContext` is reused for repeated Gecko-layer condition checks instead of constructing a new `DataContext + HashMap` for every individual condition.
 
-Outside HeroStand's render scope, the mixin preserves Palladium behavior and uses a normal context.
+The mixin deliberately redirects the condition call inside the concrete Palladium `GeckoRenderLayer.render()` method rather than injecting into the static `IPackRenderLayer` interface helper. This avoids Sponge Mixin's unsupported static-interface injector edge case and directly targets the Satsu-heavy path. Outside HeroStand's render scope, Gecko condition evaluation builds one normal context per helper call.
 
 Palladium remains optional:
 - there is no mandatory Palladium entry in `mods.toml`;
@@ -223,9 +223,9 @@ Before handing over a JAR:
 
 0.2.9 build reference:
 - branch: `rebuild/0.2.9-render-plan-cache`
-- successful Actions run: **#109**
-- run ID: `35566822333`
-- successful head commit: `d961f23f90be78a38b5f4d2ace63fbb7954c2d6c`
+- successful Actions run: **#112**
+- run ID: `35567070411`
+- successful code head: `23d45b3f8793e92f30f11b04a619c57c8bf73f97`
 
 ## Next testing order
 
