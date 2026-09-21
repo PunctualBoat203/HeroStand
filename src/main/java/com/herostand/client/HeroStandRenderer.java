@@ -134,98 +134,38 @@ public final class HeroStandRenderer
                         palladium.prepareContext(stand, level);
 
                 if (suitContext != null) {
-                    boolean baseArmorDrawn = false;
-
                     /*
-                     * 0.2.6 caches ONLY Palladium's native HumanoidArmorLayer. The
-                     * PackRenderLayerRenderer remains live, so entity_translucent add-on layers,
-                     * thrusters and other effects never enter HeroStand's VBO snapshot.
+                     * 0.2.8 reset: the base-armor VBO snapshot from 0.2.6 only covered ~1.8% of
+                     * the wall and added a second cache/render architecture. Render Palladium's
+                     * base HumanoidArmorLayer normally and spend the optimization budget where the
+                     * screenshot proves the work is: pack layers.
                      */
-                    if (snapshots.renderCached(
-                            stand,
+                    if (!palladium.renderBaseArmor(
+                            suitContext,
+                            poseStack,
+                            buffers,
                             packedLight,
-                            gameTime,
-                            poseStack)) {
-                        statSnapshotHits++;
-                        baseArmorDrawn = true;
-                    } else if (snapshots.shouldAttemptBuild(
-                            stand,
-                            gameTime)) {
-                        if (palladium.isBaseArmorSnapshotSafe(
-                                suitContext)) {
-                            StaticSuitSnapshotCache.BuildResult result =
-                                    snapshots.renderOrBuild(
-                                            stand,
-                                            suitContext,
-                                            packedLight,
-                                            gameTime,
-                                            poseStack,
-                                            (localPose,
-                                             captureSource,
-                                             samplePartialTick) -> {
-                                                if (!palladium.renderBaseArmor(
-                                                        suitContext,
-                                                        localPose,
-                                                        captureSource,
-                                                        packedLight,
-                                                        samplePartialTick)) {
-                                                    throw new IllegalStateException(
-                                                            "Palladium base armor capture failed");
-                                                }
-                                            }
-                                    );
-
-                            if (result
-                                    == StaticSuitSnapshotCache.BuildResult.DRAWN) {
-                                statSnapshotBuildDraws++;
-                                baseArmorDrawn = true;
-                            } else if (result
-                                    == StaticSuitSnapshotCache.BuildResult.REJECTED) {
-                                statCaptureRejects++;
-                            } else {
-                                statBuildDeferred++;
-                            }
-                        } else {
-                            snapshots.markUncacheable(
-                                    stand,
-                                    gameTime);
-                            statSafetyRejects++;
-                        }
-                    } else {
-                        statBlockedDynamic++;
-                    }
-
-                    if (!baseArmorDrawn) {
-                        if (!palladium.renderBaseArmor(
+                            partialTick)) {
+                        minecraft.getEntityRenderDispatcher().render(
                                 suitContext,
+                                0.0D,
+                                0.0D,
+                                0.0D,
+                                0.0F,
+                                partialTick,
                                 poseStack,
                                 buffers,
-                                packedLight,
-                                partialTick)) {
-                            /*
-                             * Layer bridge unavailable: use Palladium's complete renderer for
-                             * correctness. This branch is reached before pack-layer rendering.
-                             */
-                            minecraft.getEntityRenderDispatcher().render(
-                                    suitContext,
-                                    0.0D,
-                                    0.0D,
-                                    0.0D,
-                                    0.0F,
-                                    partialTick,
-                                    poseStack,
-                                    buffers,
-                                    packedLight
-                            );
-                            statLivePalladium++;
-                            return;
-                        }
+                                packedLight
+                        );
+                        statLivePalladium++;
+                        return;
                     }
 
                     /*
-                     * 0.2.7: static Palladium pack layers cache their emitted vertices in CPU
-                     * arrays, then replay through Minecraft's normal MultiBufferSource. Dynamic
-                     * layers stay live, so transparency/glint/batching remain native.
+                     * 0.2.8: ordinary Palladium pack layers are captured directly. Static output
+                     * is cached as raw CPU vertices and replayed through Minecraft's normal
+                     * MultiBufferSource. Known or proven-dynamic layers stay live, so
+                     * transparency/glint/batching remain native.
                      */
                     PalladiumNativeBridge.PackPassStats packStats =
                             palladium.renderPackLayersOptimized(
