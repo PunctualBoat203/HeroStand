@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.10**
+Current test build: **0.1.11**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`optimize/0.1.11-direct-palladium-armor`
+
+0.1.10 comparison branch:
 `optimize/0.1.10-visible-path`
 
 Draft validation PR: **#3**
@@ -116,6 +119,28 @@ Stress-test reference from the user:
 - Behind a solid wall: approximately 118 FPS and stands correctly occlude.
 - Therefore 0.1.10 must optimize only the visible path and must not weaken the working distance/wall culling behavior.
 
+## 0.1.11 direct Palladium armor test
+
+The user's 0.1.10 stress test remained around **80 FPS**, with no meaningful improvement over the roughly mid-80s FPS 0.1.9 result when many stands were directly visible. This strongly indicates that visibility bookkeeping and DataContext allocation were not the dominant cost.
+
+0.1.11 therefore targets the actual armor draw setup:
+- Keeps the 0.1.10 distance and wall-occlusion behavior unchanged.
+- Keeps the same Palladium pack layers and suit transforms.
+- For standard Palladium custom armor, bypasses the full HumanoidArmorLayer wrapper and directly follows Palladium's own ArmorRendererData model/texture path.
+- Resolves the Palladium armor model/texture once per identical slot per render frame instead of once per visible stand.
+- Copies the static neutral HeroStand pose to the resolved armor model once per frame/item/slot.
+- Still applies normal slot visibility, Palladium's translucent armor RenderType, dye colors/overlay, packed light, and foil/glint.
+- Detects Palladium Gecko armor and falls back to the established HumanoidArmorLayer path rather than forcing the direct renderer.
+- If the direct path encounters an incompatible Palladium internal, it disables itself and falls back to the established renderer.
+- Pack-render layers still render normally after the base armor.
+
+Validation priority for 0.1.11:
+- Compare FPS from the same many-visible-stands viewpoint used for 0.1.9/0.1.10.
+- Confirm armor textures/models are visually identical.
+- Confirm glow/transparency/glint/dyed armor if present.
+- Confirm wall occlusion and render-distance de-render still behave exactly as before.
+- If FPS is still near 80, the remaining bottleneck is primarily geometry/pack-layer vertex rendering rather than renderer setup.
+
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
 - Skips rendering when the stand has no armor.
@@ -168,7 +193,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, and current 0.1.10 test build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10 result, and current 0.1.11 test build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -193,7 +218,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `optimize/0.1.10-visible-path` for the 0.1.10 test artifact; keep `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline until 0.1.10 is user-validated.
+3. Use `optimize/0.1.11-direct-palladium-armor` for the current test artifact; keep `optimize/0.1.7-palladium-culling` as the 0.1.9 known baseline and `optimize/0.1.10-visible-path` as the no-significant-gain comparison.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
