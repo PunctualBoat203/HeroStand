@@ -32,6 +32,7 @@ public final class ClientRuntimeEvents {
     @SubscribeEvent
     public static void onDebugText(CustomizeGuiOverlayEvent.DebugText event) {
         event.getLeft().add(HeroStandRenderer.debugLine());
+        event.getLeft().add(HeroStandRenderer.debugPerfLine());
     }
 
     @SubscribeEvent
