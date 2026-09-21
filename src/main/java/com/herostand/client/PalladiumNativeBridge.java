@@ -70,6 +70,10 @@ final class PalladiumNativeBridge {
     private long planHits;
     private long planBuilds;
     private long layerCalls;
+    private long baseRenderCalls;
+    private long baseRenderNanos;
+    private long packRenderCalls;
+    private long packRenderNanos;
 
     PalladiumNativeBridge() {
         boolean present = ModList.get().isLoaded("palladium");
@@ -278,6 +282,7 @@ final class PalladiumNativeBridge {
             return false;
         }
 
+        long started = System.nanoTime();
         try {
             prepareParentModel(suitStand, partialTick);
 
@@ -304,6 +309,9 @@ final class PalladiumNativeBridge {
             return true;
         } catch (Throwable failure) {
             return false;
+        } finally {
+            baseRenderCalls++;
+            baseRenderNanos += Math.max(0L, System.nanoTime() - started);
         }
     }
 
@@ -324,6 +332,7 @@ final class PalladiumNativeBridge {
             return false;
         }
 
+        long started = System.nanoTime();
         try {
             LayerPlan plan = renderPlans.get(stand);
             int revision = stand.renderRevision();
@@ -370,6 +379,9 @@ final class PalladiumNativeBridge {
             renderPlans.remove(stand);
             PalladiumConditionContext.end();
             return false;
+        } finally {
+            packRenderCalls++;
+            packRenderNanos += Math.max(0L, System.nanoTime() - started);
         }
     }
 
@@ -383,6 +395,22 @@ final class PalladiumNativeBridge {
 
     long layerCalls() {
         return layerCalls;
+    }
+
+    long baseRenderCalls() {
+        return baseRenderCalls;
+    }
+
+    long baseRenderNanos() {
+        return baseRenderNanos;
+    }
+
+    long packRenderCalls() {
+        return packRenderCalls;
+    }
+
+    long packRenderNanos() {
+        return packRenderNanos;
     }
 
     int planCount() {
@@ -410,6 +438,10 @@ final class PalladiumNativeBridge {
         planHits = 0L;
         planBuilds = 0L;
         layerCalls = 0L;
+        baseRenderCalls = 0L;
+        baseRenderNanos = 0L;
+        packRenderCalls = 0L;
+        packRenderNanos = 0L;
 
         healthy = installed;
     }
