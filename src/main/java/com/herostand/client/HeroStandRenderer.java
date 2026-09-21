@@ -1,6 +1,7 @@
 package com.herostand.client;
 
 import com.herostand.config.HeroStandClientConfig;
+import com.herostand.config.HeroStandServerConfig;
 import com.herostand.world.HeroStandBlock;
 import com.herostand.world.HeroStandBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -207,7 +208,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     public boolean shouldRender(HeroStandBlockEntity stand, Vec3 cameraPos) {
         if (!hasArmor(stand)) return false;
 
-        int viewDistance = HeroStandClientConfig.renderDistance();
+        int viewDistance = effectiveRenderDistance();
         double viewDistanceSqr = (double) viewDistance * viewDistance;
         Vec3 center = Vec3.atCenterOf(stand.getBlockPos());
         if (cameraPos.distanceToSqr(center) > viewDistanceSqr) return false;
@@ -285,6 +286,13 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         return true;
     }
 
+    private static int effectiveRenderDistance() {
+        return Math.min(
+                HeroStandClientConfig.renderDistance(),
+                HeroStandServerConfig.maxSuitRenderDistance()
+        );
+    }
+
     private static boolean hasArmor(HeroStandBlockEntity stand) {
         for (int i = 0; i < HeroStandBlockEntity.SLOT_COUNT; i++) {
             if (!stand.isEmpty(i)) return true;
@@ -294,7 +302,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
 
     @Override
     public int getViewDistance() {
-        return HeroStandClientConfig.renderDistance();
+        return effectiveRenderDistance();
     }
 
     private record OcclusionEntry(long gameTime, Vec3 cameraPos, boolean visible) {}
