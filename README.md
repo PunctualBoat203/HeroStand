@@ -1,5 +1,13 @@
 # HeroStand — Development Handoff
 
+## Handoff checkpoint — 2026-09-21
+
+This README is the authoritative HeroStand development handoff.
+
+The current implementation branch is `rebuild/0.2.9-render-plan-cache`. The latest branch build passes, but **0.2.9 is not yet user-validated in-game**.
+
+The most important discovery from the latest deep dive is that the Satsu Iron Man 3.5.3 wall is dominated by a very large Palladium/GeckoLib render graph rather than ordinary base armor. Previous visual-capture/VBO experiments repeatedly failed, artifacted, or crashed and are explicitly ruled out below. The 0.2.9 direction therefore optimizes repeated Palladium/Satsu bookkeeping while preserving exactly one native visual render per layer.
+
 ## Project
 
 HeroStand is a standalone **Minecraft Forge 1.20.1** mod for efficient superhero/modded armor displays, especially Palladium/Satsu Iron Man suits.
@@ -8,7 +16,7 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.9**
+Current test build: **0.2.9** — build-passing, awaiting PunctualBoat in-game validation
 
 ## Active development line
 
@@ -223,9 +231,11 @@ Before handing over a JAR:
 
 0.2.9 build reference:
 - branch: `rebuild/0.2.9-render-plan-cache`
-- successful Actions run: **#112**
-- run ID: `35567070411`
-- successful code head: `23d45b3f8793e92f30f11b04a619c57c8bf73f97`
+- latest successful Actions run: **#113**
+- run ID: `35567230354`
+- latest successful branch head: `03f0471f03a59666655d20ebf2088a6541cee7b5`
+- status: **build passes; PunctualBoat has not yet validated 0.2.9 in-game**
+- do **not** claim the FPS issue is fixed until the same mixed-suit wall test confirms it
 
 ## Next testing order
 
