@@ -11,6 +11,7 @@ public final class PalladiumConditionContext {
 
     private static long reusedConditionChecks;
     private static long fallbackContextBuilds;
+    private static long heroStandGeckoRenders;
 
     private PalladiumConditionContext() {}
 
@@ -34,6 +35,16 @@ public final class PalladiumConditionContext {
         fallbackContextBuilds++;
     }
 
+    /**
+     * Counts concrete GeckoRenderLayer render attempts while HeroStand's shared
+     * condition context is active. This is intentionally just a counter: 0.2.10
+     * profiles the enclosing pack-render wall time without adding a timer to every
+     * Gecko leaf render.
+     */
+    public static void noteHeroStandGeckoRender() {
+        heroStandGeckoRenders++;
+    }
+
     public static long reusedConditionChecks() {
         return reusedConditionChecks;
     }
@@ -42,9 +53,14 @@ public final class PalladiumConditionContext {
         return fallbackContextBuilds;
     }
 
+    public static long heroStandGeckoRenders() {
+        return heroStandGeckoRenders;
+    }
+
     public static void resetStats() {
         reusedConditionChecks = 0L;
         fallbackContextBuilds = 0L;
+        heroStandGeckoRenders = 0L;
         CURRENT.remove();
     }
 }
