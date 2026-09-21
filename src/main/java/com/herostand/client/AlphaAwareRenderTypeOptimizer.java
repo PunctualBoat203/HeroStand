@@ -21,6 +21,7 @@ import java.util.Optional;
 final class AlphaAwareRenderTypeOptimizer {
     private static final String PALLADIUM_ARMOR =
             "palladium:armor_cutout_no_cull_transparency";
+    private static final String ENTITY_TRANSLUCENT = "entity_translucent";
 
     private final Map<RenderType, RenderType> cache = new IdentityHashMap<>();
 
@@ -70,9 +71,32 @@ final class AlphaAwareRenderTypeOptimizer {
         RenderType cached = cache.get(original);
         if (cached != null) return cached;
 
-        RenderType optimized = tryOptimize(original);
+        RenderType optimized = tryOptimizeAlwaysSafe(original);
         cache.put(original, optimized);
         return optimized;
+    }
+
+    /**
+     * Returns a cutout replacement for plain entity_translucent only when the texture itself uses
+     * binary alpha. The caller must additionally prove the submitted vertex alpha is binary before
+     * using this candidate, because Palladium tints may intentionally fade a layer.
+     */
+    RenderType deferredBinaryCutoutCandidate(RenderType original) {
+        if (nameField == null) return null;
+
+        try {
+            String name = (String) nameField.get(original);
+            if (!ENTITY_TRANSLUCENT.equals(name)) return null;
+
+            Optional<ResourceLocation> texture = textureOf(original);
+            if (texture.isEmpty() || !TextureAlphaClassifier.isBinary(texture.get())) {
+                return null;
+            }
+
+            return RenderType.entityCutoutNoCull(texture.get());
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     void clear() {
@@ -80,7 +104,7 @@ final class AlphaAwareRenderTypeOptimizer {
         TextureAlphaClassifier.clear();
     }
 
-    private RenderType tryOptimize(RenderType original) {
+    private RenderType tryOptimizeAlwaysSafe(RenderType original) {
         if (nameField == null
                 || stateField == null
                 || textureStateField == null
@@ -94,12 +118,7 @@ final class AlphaAwareRenderTypeOptimizer {
                 return original;
             }
 
-            Object state = stateField.get(original);
-            Object textureState = textureStateField.get(state);
-
-            @SuppressWarnings("unchecked")
-            Optional<ResourceLocation> texture =
-                    (Optional<ResourceLocation>) cutoutTextureMethod.invoke(textureState);
+            Optional<ResourceLocation> texture = textureOf(original);
 
             if (texture.isEmpty() || !TextureAlphaClassifier.isBinary(texture.get())) {
                 return original;
@@ -114,5 +133,15 @@ final class AlphaAwareRenderTypeOptimizer {
         } catch (Throwable ignored) {
             return original;
         }
+    }
+
+    private Optional<ResourceLocation> textureOf(RenderType renderType) throws Exception {
+        Object state = stateField.get(renderType);
+        Object textureState = textureStateField.get(state);
+
+        @SuppressWarnings("unchecked")
+        Optional<ResourceLocation> texture =
+                (Optional<ResourceLocation>) cutoutTextureMethod.invoke(textureState);
+        return texture;
     }
 }
