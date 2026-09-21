@@ -2,7 +2,7 @@ name: Build HeroStand
 
 on:
   push:
-    branches: [ "main", "rebuild/0.2.2-stable-snapshot" ]
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
