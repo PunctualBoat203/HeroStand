@@ -4,6 +4,7 @@ import com.herostand.config.HeroStandClientConfig;
 import com.herostand.config.HeroStandServerConfig;
 import com.herostand.world.HeroStandBlock;
 import com.herostand.world.HeroStandBlockEntity;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
@@ -27,10 +28,16 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlockEntity> {
+    private static final Set<HeroStandRenderer> ACTIVE_RENDERERS =
+            Collections.newSetFromMap(new WeakHashMap<>());
+
     /*
      * Distance and wall occlusion are already proven useful by user testing. Keep those rules
      * independent from the GPU backend so a backend soft-failure never disables culling.
@@ -107,6 +114,53 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         );
 
         resetParentModel();
+
+        synchronized (ACTIVE_RENDERERS) {
+            ACTIVE_RENDERERS.add(this);
+        }
+    }
+
+    /**
+     * Called from the Forge client tick so idle VBOs are retired even while every HeroStand is
+     * outside render distance and renderOrBuild(...) is not running.
+     */
+    static void tickGpuCaches(long gameTime) {
+        synchronized (ACTIVE_RENDERERS) {
+            for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
+                if (renderer.staticArmorCache != null) {
+                    renderer.staticArmorCache.tick(gameTime);
+                }
+            }
+        }
+    }
+
+    /**
+     * Resource reload/logout safety. Explicitly closes every GPU buffer and resets Palladium
+     * session caches. GL deletion is always moved onto the render thread when necessary.
+     */
+    static void clearAllGpuCaches() {
+        Runnable clearTask = () -> {
+            synchronized (ACTIVE_RENDERERS) {
+                for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
+                    if (renderer.staticArmorCache != null) {
+                        renderer.staticArmorCache.clear();
+                    }
+
+                    renderer.palladium.resetSessionCache();
+                    renderer.palladiumSuitStand.reset();
+                    renderer.preparedPalladiumContext = null;
+                    renderer.gpuRouter.resetFailures();
+                    renderer.occlusionCache.clear();
+                    renderer.occlusionLevel = null;
+                }
+            }
+        };
+
+        if (RenderSystem.isOnRenderThread()) {
+            clearTask.run();
+        } else {
+            RenderSystem.recordRenderCall(clearTask::run);
+        }
     }
 
     @Override
