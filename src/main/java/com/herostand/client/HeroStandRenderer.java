@@ -60,6 +60,8 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     };
 
     private final ArmorStandArmorModel parentModel;
+    private final ArmorStandArmorModel innerArmorModel;
+    private final ArmorStandArmorModel outerArmorModel;
     private final HumanoidArmorLayer<ArmorStand, ArmorStandArmorModel, ArmorStandArmorModel> armorLayer;
     private final PalladiumRenderBridge palladium = new PalladiumRenderBridge();
 
@@ -85,10 +87,15 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                     }
                 };
 
+        this.innerArmorModel =
+                new ArmorStandArmorModel(context.bakeLayer(ModelLayers.ARMOR_STAND_INNER_ARMOR));
+        this.outerArmorModel =
+                new ArmorStandArmorModel(context.bakeLayer(ModelLayers.ARMOR_STAND_OUTER_ARMOR));
+
         this.armorLayer = new HumanoidArmorLayer<>(
                 parent,
-                new ArmorStandArmorModel(context.bakeLayer(ModelLayers.ARMOR_STAND_INNER_ARMOR)),
-                new ArmorStandArmorModel(context.bakeLayer(ModelLayers.ARMOR_STAND_OUTER_ARMOR)),
+                innerArmorModel,
+                outerArmorModel,
                 Minecraft.getInstance().getModelManager()
         );
     }
@@ -139,10 +146,23 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         poseStack.scale(-1.0F, -1.0F, 1.0F);
         poseStack.translate(0.0D, -1.501D, 0.0D);
 
-        armorLayer.render(
-                poseStack, buffers, packedLight, renderContext,
-                0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
+        boolean directArmor = palladium.renderArmorDirect(
+                renderContext,
+                parentModel,
+                innerArmorModel,
+                outerArmorModel,
+                poseStack,
+                buffers,
+                packedLight,
+                partialTick
         );
+
+        if (!directArmor) {
+            armorLayer.render(
+                    poseStack, buffers, packedLight, renderContext,
+                    0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
+            );
+        }
 
         palladium.renderPackLayers(
                 renderContext, parentModel, poseStack, buffers, packedLight, partialTick
