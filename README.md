@@ -8,11 +8,15 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.2**
+Current test build: **0.2.3**
 
 ## IMPORTANT — current development line
 
 Active renderer rebuild branch:
+
+`rebuild/0.2.3-single-capture`
+
+0.2.2 stability experiment branch:
 
 `rebuild/0.2.2-stable-snapshot`
 
@@ -36,7 +40,8 @@ Known reference points:
 - **0.1.19**: no meaningful improvement and may have been worse.
 - **0.2.0**: clean renderer reset; user test was a very stable **49–50 FPS**, about **79% GPU**, and about **511 MiB/s allocation** at the mixed-suit wall.
 - **0.2.1**: cache-hot-path correction + F3 diagnostics. User test proved the snapshot cache was being used **0.0%** of the time.
-- **0.2.2**: removes the over-conservative unknown-layer rejection and proves snapshot stability by comparing two native Palladium captures at different animation times.
+- **0.2.2**: unknown-layer rejection was removed, but the user's F3 test still showed **0.0% snapshot usage**, **cache=0**, **cap=106**, about **48 FPS / 83% GPU**, and it introduced visible sky flicker. The two-pass capture/sorting-rejection design is therefore abandoned.
+- **0.2.3**: single native capture only; no second recursive entity render. Palladium RenderTypes that still request sorting are sorted once during snapshot upload instead of rejecting the whole suit.
 
 Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
 
@@ -269,6 +274,55 @@ The F3 line is shortened in 0.2.2 so the useful fields fit on screen:
 
 For the same wall, the key success signal is no longer just FPS. First verify that `snap` climbs substantially above 0% and `cache` becomes nonzero. Only then does the snapshot architecture deserve an FPS comparison.
 
+## 0.2.2 measured result — capture-stage rejection
+
+PunctualBoat's 0.2.2 wall screenshot showed approximately:
+- **48 FPS**
+- **83% GPU**
+- approximately **470 MiB/s allocation**
+- `snap=0.0%`
+- `hit=0`
+- `build=0`
+- `live=86933`
+- `dyn=0`
+- `cap=106`
+- `cache=0`
+
+This proves the old safety classifier was no longer the blocker (`dyn=0`), but every attempted snapshot was still rejected at the **capture stage**.
+
+The main cause is Palladium's runtime/dynamic texture system:
+- many resolved textures are runtime `ResourceLocation` values registered directly with Minecraft's TextureManager;
+- they may not exist as normal ResourceManager files;
+- HeroStand's alpha classifier therefore cannot prove them binary/cutout;
+- Palladium commonly maps otherwise-static armor/layers to translucent RenderTypes;
+- 0.2.2 then rejected those RenderTypes because they requested quad sorting.
+
+The two-time-sample capture also caused **sky flicker** in PunctualBoat's test and must not be reintroduced.
+
+## 0.2.3 single-capture / sorted snapshot correction
+
+0.2.3 removes the failed two-pass capture experiment.
+
+New policy:
+- render the native Palladium SuitStand **once** when building a snapshot;
+- known thruster/lightning/ExtraAnimatedModel content still stays live;
+- unknown/custom static add-on layers may still attempt capture;
+- a RenderType requesting translucent sorting is **not grounds for rejecting the entire suit**;
+- those local-space quads are sorted once during snapshot upload with Minecraft's current VertexSorting;
+- the resulting GPU buffer is reused like other static suit geometry;
+- snapshot warm-up is limited to **one new suit per tick** to reduce one-frame spikes/state disturbance;
+- once a snapshot exists, the ItemStack-key hot path still bypasses Palladium reflection/context setup.
+
+The F3 line is now:
+
+`HeroStand 0.2.3 snap=... hit=... build=... live=... dyn=... cap=... cache=...`
+
+The first success condition for 0.2.3 is simple:
+- `cache` must become nonzero;
+- `build` must become nonzero;
+- after warm-up, `hit` should rise quickly and `snap` should become a substantial percentage;
+- repeated `cap` growth with `cache=0` means capture is still failing and should be treated as a bug, not as a performance result.
+
 ## Distance and wall occlusion
 
 0.2.0 intentionally keeps the known 0.1.9 culling behavior separate from the visual renderer.
@@ -299,7 +353,7 @@ In particular, the old manual `PalladiumRenderBridge` was removed from the 0.2.0
 
 Do not re-add the old GPU-vendor router, partial base-only VBO cache, fast manual model emitter, or layered renderer experiments unless a specific measured reason justifies doing so.
 
-## 0.2.2 validation priorities
+## 0.2.3 validation priorities
 
 Test in this order:
 
@@ -361,7 +415,12 @@ Before handing over a JAR:
 4. validate the artifact/JAR contents;
 5. do not silently substitute a stale `main` build.
 
-0.2.2 Actions reference:
+0.2.3 Actions reference:
+- branch: `rebuild/0.2.3-single-capture`
+- successful latest-head build: **run #90**
+- build commit: `9da80ff04e672203d4a7f4b3e68a3d896e15e355`
+
+0.2.2 reference:
 - branch: `rebuild/0.2.2-stable-snapshot`
 - successful build: **run #87**
 - build commit: `614b76f803bae429fafd8ee051a58378f6905bc4`
