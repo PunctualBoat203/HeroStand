@@ -111,7 +111,7 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             return BuildResult.DEFERRED;
         }
 
-        Snapshot built = build(suitStand, renderer, gameTime);
+        Snapshot built = build(renderer, gameTime);
         if (built == null) {
             rememberUncacheable(suit, gameTime);
             return BuildResult.REJECTED;
@@ -168,55 +168,33 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
         clear();
     }
 
-    private Snapshot build(ArmorStand suitStand,
-                           SnapshotRenderer renderer,
-                           long gameTime) {
-        CaptureSource first = new CaptureSource(renderTypeResolver);
-        CaptureSource second = null;
-        int originalTick = suitStand.tickCount;
+    private Snapshot build(SnapshotRenderer renderer, long gameTime) {
+        CaptureSource capture = new CaptureSource(renderTypeResolver);
 
         try {
             /*
-             * Render the real Palladium SuitStand twice at different animation times. This replaces
-             * the old "unknown Java class = unsafe" rule with evidence from the actual emitted
-             * geometry, textures and vertex colors.
+             * One native Palladium render only.
+             *
+             * 0.2.2's second recursive entity render caused visible render-state/sky flicker while
+             * trying to prove time stability. Known animated layers are filtered by the bridge
+             * instead. Unknown/static add-on layers are allowed to capture normally.
              */
-            renderer.render(new PoseStack(), first, 0.0F);
+            renderer.render(new PoseStack(), capture, 0.0F);
 
-            if (!first.snapshotSafe()) {
-                first.discard();
+            if (!capture.snapshotSafe()) {
+                capture.discard();
                 return null;
             }
 
-            long firstSignature = first.signature();
-
-            second = new CaptureSource(renderTypeResolver);
-            suitStand.tickCount = originalTick + 7;
-            renderer.render(new PoseStack(), second, 0.5F);
-
-            if (!second.snapshotSafe()
-                    || firstSignature != second.signature()) {
-                first.discard();
-                second.discard();
-                return null;
-            }
-
-            second.discard();
-            second = null;
-            suitStand.tickCount = originalTick;
-
-            List<MeshPart> parts = first.upload();
+            List<MeshPart> parts = capture.upload();
             if (parts.isEmpty()) {
                 return null;
             }
 
             return new Snapshot(parts, gameTime);
         } catch (Throwable failure) {
-            first.discard();
-            if (second != null) second.discard();
+            capture.discard();
             return null;
-        } finally {
-            suitStand.tickCount = originalTick;
         }
     }
 
@@ -359,20 +337,10 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             if (!safe) return false;
 
             for (Bucket bucket : buckets.values()) {
-                RenderType drawType =
+                bucket.drawType =
                         resolver.resolve(bucket.originalType, bucket.partialVertexAlpha);
-
-                /*
-                 * Camera-relative translucent sorting is not stable once geometry is cached in a
-                 * reusable local-space VBO. If it still needs sorting after alpha classification,
-                 * keep this suit on Palladium's live renderer.
-                 */
-                if (resolver.requiresSorting(drawType)) {
-                    safe = false;
-                    return false;
-                }
-
-                bucket.drawType = drawType;
+                bucket.sortBeforeUpload =
+                        resolver.requiresSorting(bucket.drawType);
             }
 
             return true;
@@ -408,6 +376,15 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
             try {
                 for (Bucket bucket : buckets.values()) {
+                    if (bucket.sortBeforeUpload) {
+                        /*
+                         * Palladium frequently maps otherwise-static armor/layers to translucent
+                         * RenderTypes. Rejecting those made snapshot coverage 0%. Sort the local
+                         * quads once at capture time and reuse the uploaded buffer.
+                         */
+                        bucket.builder.setQuadSorting(RenderSystem.getVertexSorting());
+                    }
+
                     BufferBuilder.RenderedBuffer rendered =
                             bucket.builder.endOrDiscardIfEmpty();
                     if (rendered == null) continue;
@@ -464,6 +441,7 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
             RenderType drawType;
             boolean partialVertexAlpha;
+            boolean sortBeforeUpload;
             int vertexCount;
             long contentHash = 0xcbf29ce484222325L;
 
