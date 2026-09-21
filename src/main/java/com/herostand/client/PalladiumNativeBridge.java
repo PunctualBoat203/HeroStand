@@ -61,7 +61,6 @@ final class PalladiumNativeBridge {
     private final Method modelCacheGetModel;
 
     private final Map<Item, RendererInfo> rendererCache = new IdentityHashMap<>();
-    private final Map<Item, Boolean> snapshotSafetyCache = new IdentityHashMap<>();
 
     private ArmorStand context;
     private Level contextLevel;
@@ -286,15 +285,9 @@ final class PalladiumNativeBridge {
                 if (stack.isEmpty()) continue;
 
                 Item item = stack.getItem();
-                Boolean cached = snapshotSafetyCache.get(item);
-                if (cached != null) {
-                    if (!cached) return false;
-                    continue;
+                if (!itemSnapshotSafe(item, suitStand, slot)) {
+                    return false;
                 }
-
-                boolean safe = itemSnapshotSafe(item, suitStand, slot);
-                snapshotSafetyCache.put(item, safe);
-                if (!safe) return false;
             }
 
             return true;
@@ -305,7 +298,6 @@ final class PalladiumNativeBridge {
 
     void reset() {
         rendererCache.clear();
-        snapshotSafetyCache.clear();
         context = null;
         contextLevel = null;
         healthy = installed;
@@ -438,7 +430,6 @@ final class PalladiumNativeBridge {
     private void disable() {
         healthy = false;
         rendererCache.clear();
-        snapshotSafetyCache.clear();
         context = null;
         contextLevel = null;
     }
