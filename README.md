@@ -4,9 +4,9 @@
 
 This README is the authoritative HeroStand development handoff.
 
-The current implementation branch is `rebuild/0.2.9-render-plan-cache`. The latest branch build passes, but **0.2.9 is not yet user-validated in-game**.
+The current diagnostic branch is `rebuild/0.2.10-gecko-profiler`. **0.2.9 has now been tested in-game** on the repeatable mixed Satsu wall: its bookkeeping caches work, but the original performance/allocation wall remains. 0.2.10 therefore adds low-overhead timing/call-rate diagnostics without changing the native Palladium/Gecko visual path.
 
-The most important discovery from the latest deep dive is that the Satsu Iron Man 3.5.3 wall is dominated by a very large Palladium/GeckoLib render graph rather than ordinary base armor. Previous visual-capture/VBO experiments repeatedly failed, artifacted, or crashed and are explicitly ruled out below. The 0.2.9 direction therefore optimizes repeated Palladium/Satsu bookkeeping while preserving exactly one native visual render per layer.
+The most important discovery from the latest deep dive remains that the Satsu Iron Man 3.5.3 wall is dominated by a very large Palladium/GeckoLib render graph rather than ordinary base armor. Previous visual-capture/VBO experiments repeatedly failed, artifacted, or crashed and are explicitly ruled out below.
 
 ## Project
 
@@ -16,15 +16,15 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.9** — build-passing, awaiting PunctualBoat in-game validation
+Current test build: **0.2.10** — build-passing profiler, awaiting mixed-wall timing capture
 
 ## Active development line
 
 Current branch:
 
-`rebuild/0.2.9-render-plan-cache`
+`rebuild/0.2.10-gecko-profiler`
 
-0.2.9 was rebuilt from the **stable 0.2.6 visual path**, not from the artifacting 0.2.8 experiment.
+0.2.10 is based on the validated **0.2.9 native visual path** and adds diagnostics only: wall-time measurement around base armor and pack rendering plus a HeroStand-scoped Gecko leaf-render counter. It does not add probe renders, capture geometry, or replace Palladium/Gecko rendering.
 
 Do not call a stale `main` code build the newest renderer unless this branch has been merged. The handoff on `main` is intentionally kept current even when implementation work remains on a test branch.
 
@@ -74,6 +74,62 @@ This means culling works; the remaining problem is the cost of visible suit rend
 - **0.2.6:** stable split renderer. Base-armor cache only reached about **1.8%** while pack-layer calls exceeded **154,000**. This proved base armor is not the main cost.
 - **0.2.7:** `pack=0.0%`, `build=0`, `cache=0`, `why=unsupported`; using Palladium `createSnapshot()` as general eligibility was wrong.
 - **0.2.8:** `pack=0.0%`, `build=0`, `cache=0`, `why=empty`; artifacting returned. Later source inspection proved Gecko layers bypassed HeroStand's capture buffer and wrote to Minecraft's global world buffer during the extra probe renders.
+
+## 0.2.9 in-game validation result — 2026-09-21
+
+PunctualBoat tested the build on the same mixed-suit wall and supplied an F3 screenshot.
+
+Observed in that capture:
+- **53 FPS**;
+- **84% GPU**;
+- **484 MiB/s allocation rate**;
+- `planHit=112359`;
+- `build=54`;
+- `plans=54`;
+- `layers=223`;
+- `calls=453442`;
+- `condReuse=5184100`;
+- `condNew=714`;
+- `fallback=0`.
+
+No black/top-screen artifacting was visible in the supplied capture, and no crash was reported.
+
+Interpretation:
+- render-plan reuse is working;
+- shared Gecko condition-context reuse is working heavily;
+- bridge fallback is not the problem;
+- allocation remains inside the old roughly 450–500 MiB/s range;
+- FPS remains inside the old roughly 45–55 FPS range.
+
+Therefore **do not spend more time on condition-context allocation or layer-plan discovery as the primary bottleneck**. The next task is to measure the actual native Palladium/Gecko render path.
+
+## HeroStand 0.2.10 profiler
+
+0.2.10 keeps 0.2.9's visual behavior and adds a second F3 line:
+
+`HS perf pack=...% base=...% pack=...us/stand stands=.../s gecko=.../s g/stand=...`
+
+The profiler uses a rolling one-second window while F3 is open.
+
+Interpretation:
+- `pack`: percentage of wall time spent inside HeroStand's native Palladium pack-layer pass;
+- `base`: percentage of wall time spent inside the native base-armor pass;
+- `pack us/stand`: average pack-layer wall time for one visible HeroStand;
+- `stands/s`: visible Palladium HeroStand render calls per second;
+- `gecko/s`: concrete Gecko render-layer attempts per second while HeroStand's shared context is active;
+- `g/stand`: Gecko render-layer attempts per HeroStand render.
+
+This deliberately avoids per-Gecko `System.nanoTime()` calls so the profiler itself does not materially inflate the Satsu-heavy leaf-render path.
+
+0.2.10 build reference:
+- branch: `rebuild/0.2.10-gecko-profiler`
+- successful Actions run: **#117**
+- run ID: `35570089547`
+- successful head: `02a92292d4b7bd2cd48bdc01589e843ad16fe3c4`
+- artifact JAR: `herostand-0.2.10.jar`
+- status: **build passes; awaiting same-wall F3 profiler capture**
+
+For the next test, face the same wall, open F3, wait at least 2–3 seconds for the rolling profiler to settle, and capture both HeroStand lines plus FPS/GPU/allocation.
 
 ## DO NOT LOOP BACK TO THESE APPROACHES
 
