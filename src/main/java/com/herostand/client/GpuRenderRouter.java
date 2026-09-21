@@ -68,14 +68,12 @@ final class GpuRenderRouter {
     Backend[] orderedBackends() {
         initializeIfNeeded();
 
-        if (supportsModernStatic()) {
-            return new Backend[] {
-                    Backend.MODERN_STATIC,
-                    Backend.BALANCED_STREAM,
-                    Backend.GENERIC_NATIVE
-            };
-        }
-
+        /*
+         * 0.1.17 deliberately prefers batched immediate rendering even on RTX/RDNA2+. The 0.1.15
+         * VBO experiment cached geometry but submitted many small per-stand/per-RenderType draws,
+         * which is the opposite of the batching strategy used by successful Minecraft renderer
+         * optimizers. Keep MODERN_STATIC in the enum for rollback/testing, but do not select it.
+         */
         return new Backend[] {
                 Backend.BALANCED_STREAM,
                 Backend.GENERIC_NATIVE,
@@ -85,7 +83,7 @@ final class GpuRenderRouter {
 
     boolean isSupported(Backend backend) {
         initializeIfNeeded();
-        return backend != Backend.MODERN_STATIC || supportsModernStatic();
+        return backend != Backend.MODERN_STATIC;
     }
 
     boolean supportsModernStatic() {
