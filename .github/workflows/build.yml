@@ -2,7 +2,7 @@ name: Build HeroStand
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "render/0.1.15-modern-static-vbo" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
