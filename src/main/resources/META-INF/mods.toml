@@ -6,6 +6,7 @@ license="All Rights Reserved"
 modId="herostand"
 version="${mod_version}"
 displayName="HeroStand"
+authors="PunctualBoat"
 description='''Optimized suit displays using non-ticking block entities instead of persistent armor stands.'''
 
 [[dependencies.herostand]]
