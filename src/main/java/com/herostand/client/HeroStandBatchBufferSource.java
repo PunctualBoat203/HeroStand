@@ -27,6 +27,8 @@ final class HeroStandBatchBufferSource implements MultiBufferSource {
 
     private final LinkedHashMap<RenderType, BufferBuilder> builders = new LinkedHashMap<>();
     private final LinkedHashMap<RenderType, Boolean> active = new LinkedHashMap<>();
+    private final AlphaAwareRenderTypeOptimizer alphaOptimizer =
+            new AlphaAwareRenderTypeOptimizer();
 
     private MultiBufferSource delegate;
 
@@ -53,9 +55,13 @@ final class HeroStandBatchBufferSource implements MultiBufferSource {
             throw new IllegalStateException("HeroStand batch source used outside a render pass");
         }
 
-        if (!renderType.canConsolidateConsecutiveGeometry()) {
-            return fallback.getBuffer(renderType);
+        RenderType optimizedType = alphaOptimizer.optimize(renderType);
+
+        if (!optimizedType.canConsolidateConsecutiveGeometry()) {
+            return fallback.getBuffer(optimizedType);
         }
+
+        renderType = optimizedType;
 
         BufferBuilder builder = builders.get(renderType);
         if (builder == null) {
@@ -95,6 +101,10 @@ final class HeroStandBatchBufferSource implements MultiBufferSource {
 
         active.clear();
         delegate = null;
+    }
+
+    void clearOptimizationCaches() {
+        alphaOptimizer.clear();
     }
 
     void discard() {
