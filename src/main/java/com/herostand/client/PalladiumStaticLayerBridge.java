@@ -340,6 +340,18 @@ final class PalladiumStaticLayerBridge {
                     visual.renderType, packedLight
             );
 
+            if (visual.model instanceof HumanoidModel humanoid
+                    && FastHumanoidModelRenderer.render(
+                            humanoid,
+                            poseStack,
+                            consumer,
+                            light,
+                            OverlayTexture.NO_OVERLAY,
+                            visual.red, visual.green, visual.blue, visual.alpha
+                    )) {
+                return;
+            }
+
             @SuppressWarnings("rawtypes")
             EntityModel raw = visual.model;
             raw.renderToBuffer(
@@ -363,6 +375,18 @@ final class PalladiumStaticLayerBridge {
             int light = (int) renderTypeGetPackedLight.invokeExact(
                     visual.renderType, packedLight
             );
+
+            if (parentModel instanceof HumanoidModel humanoid
+                    && FastHumanoidModelRenderer.render(
+                            humanoid,
+                            poseStack,
+                            consumer,
+                            light,
+                            OverlayTexture.NO_OVERLAY,
+                            visual.red, visual.green, visual.blue, visual.alpha
+                    )) {
+                return;
+            }
 
             @SuppressWarnings("rawtypes")
             EntityModel rawParent = parentModel;
