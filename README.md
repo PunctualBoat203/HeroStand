@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.12**
+Current test build: **0.1.13**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`optimize/0.1.13-static-palladium-cache`
+
+0.1.12 compatibility branch:
 `compat/0.1.12-suitstand-parent`
 
 0.1.11 performance branch:
@@ -166,6 +169,44 @@ Validation priority:
 - Re-run the many-visible-stands FPS test.
 - Confirm distance and solid-wall culling still work.
 
+## 0.1.13 mixed-suit performance pass
+
+A broader 0.1.10 test with many **different** superhero/Palladium suit sets exposed a substantially worse visible-render case:
+- Approximately **55 FPS** with the large mixed-suit wall visible.
+- GPU usage around **76%**.
+- Allocation rate around **507 MiB/s**.
+- This is materially worse than the roughly 80–85 FPS repeated/less-varied suit test.
+- Distance culling and solid-wall occlusion still recover performance correctly, so those systems are not the primary bottleneck.
+
+This changes the performance diagnosis: HeroStand must optimize Palladium's **per-layer visual-state resolution**, not just stand visibility or repeated identical-item lookups.
+
+0.1.13 changes:
+- Includes the 0.1.12 normal-humanoid parent-pivot compatibility fix for detached custom helmet geometry.
+- Converts the hottest reflective Palladium calls from `Method.invoke(...)` varargs to typed `MethodHandle` calls, avoiding argument-array/primitive-boxing churn in the per-layer render loop.
+- Keeps reusable Palladium `DataContext` objects per armor slot.
+- Adds a dedicated static-layer accelerator for normal `PackRenderLayer`, `SkinOverlayPackRenderLayer`, and fully-supported compound layers.
+- Reuses the existing slot DataContext when evaluating cached layer conditions instead of allowing Palladium helper paths to construct new DataContext/HashMap objects for each condition.
+- Caches resolved model selector, dynamic texture result, tint, glint decision, and layer activation for roughly 2–3 seconds per item/NBT/slot variant, with staggered refreshes.
+- Still runs the actual model pose setup and vertex emission every frame, so this is not a visual impostor/LOD shortcut.
+- Unknown or genuinely dynamic layer types fall back to Palladium's original renderer unchanged.
+- Base Palladium armor model/texture resolution is also cached across frames instead of only within one frame.
+- Cached Palladium models have the HeroStand parent pose reapplied before every draw because Palladium shares model instances globally.
+
+Why this specifically targets mixed suit types:
+- Even a unique suit only needs its expensive model/texture/condition selection refreshed occasionally; it should not resolve the same static display state 50–120 times per second.
+- Palladium condition helpers can allocate new DataContext/HashMap objects repeatedly. HeroStand now evaluates supported static-layer conditions against its already-reused DataContext.
+- Different suit definitions still emit their own real geometry and textures, preserving appearance.
+
+0.1.13 validation priorities:
+- Reproduce the mixed-suit wall from the ~55 FPS / ~507 MiB/s screenshot.
+- Compare **FPS, allocation rate, and GPU usage** after standing still for several seconds.
+- Verify the previously detached helmet suit is aligned.
+- Check several different suits for missing pack layers, wrong textures/tints, glint, or model variants.
+- Check any suit with obviously animated thrusters/effects; unsupported dynamic layers must remain on Palladium's original path.
+- Confirm distance de-render and solid-wall occlusion remain unchanged.
+
+If 0.1.13 substantially reduces allocation but FPS remains low, the remaining bottleneck is the unavoidable per-frame geometry/vertex emission. The next architectural step would be a static vertex/VBO cache or batching layer keyed by suit visual + lighting, rather than further Java-side lookup caching.
+
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
 - Skips rendering when the stand has no armor.
@@ -218,7 +259,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10 result, 0.1.11 performance experiment, and current 0.1.12 compatibility build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10 result, 0.1.11 performance experiment, 0.1.12 compatibility fix, and current 0.1.13 mixed-suit performance build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -243,7 +284,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `compat/0.1.12-suitstand-parent` for the current compatibility test artifact; keep `optimize/0.1.11-direct-palladium-armor` as the 0.1.11 performance experiment, `optimize/0.1.10-visible-path` as the 0.1.10 comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
+3. Use `optimize/0.1.13-static-palladium-cache` for the current mixed-suit performance artifact; keep `compat/0.1.12-suitstand-parent` as the detached-helmet compatibility branch, `optimize/0.1.11-direct-palladium-armor` as the 0.1.11 experiment, `optimize/0.1.10-visible-path` as the 0.1.10 comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
