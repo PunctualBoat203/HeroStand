@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.17**
+Current test build: **0.1.18**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`render/0.1.18-alpha-aware`
+
+0.1.17 batching / Mark One fix branch:
 `render/0.1.17-batch-first-native-compat`
 
 0.1.16 cache/VBO branch:
@@ -417,7 +420,68 @@ Relevant external renderer work strongly points to **fewer/larger draw submissio
 - Verify distance de-render and solid-wall occlusion remain unchanged.
 - Watch for transparency ordering problems because HeroStand now delays consolidatable suit RenderTypes until AFTER_BLOCK_ENTITIES.
 
-If batching helps but GPU load remains high, the next simple GPU-side candidate is **opaque/cutout classification** for Palladium armor textures so fully opaque armor does not pay translucent blending cost. Full instancing/texture-atlas work should come only after those simpler fixes are measured.
+### 0.1.17 user result
+
+The user confirmed the **Mark One visual regression is fixed** in 0.1.17. Its head/body/legs/boots now render at the expected SuitStand scale/alignment.
+
+Performance, however, remained poor in the mixed-suit wall:
+- roughly **47 FPS**
+- roughly **82% GPU usage**
+- roughly **486 MiB/s allocation rate**
+
+This means the compatibility/native-routing fix worked, but batching alone did not solve the visible-suit cost. The GPU is still heavily occupied and Java allocation remains high.
+
+## 0.1.18 alpha-aware / over-conservative fallback correction
+
+A deeper source review found two simpler costs that 0.1.17 still paid.
+
+### 1. Palladium pays translucency for armor that often does not need it
+Palladium's custom base-armor RenderType is named `armor_cutout_no_cull_transparency`, but it enables normal translucent blending. Vanilla Minecraft armor uses `RenderType.armorCutoutNoCull(...)`, which keeps no-cull armor geometry while disabling blending/sorting.
+
+0.1.18 adds one-time texture alpha classification:
+- Static texture resources are scanned once.
+- If every texture pixel alpha is either **0 or 255**, the texture is classified as binary/cutout.
+- If any pixel has partial alpha **1–254**, Palladium's translucent path is preserved.
+- Generated/dynamic textures that cannot be proven safe remain translucent.
+- Classification cache is cleared on resource reload/session renderer reset.
+
+For proven binary base armor:
+- Replace Palladium's blended armor RenderType with vanilla `armorCutoutNoCull`.
+- Preserve no-cull behavior, lightmap, overlay, and armor shader semantics.
+- Keep real translucency for glass/fades/semitransparent armor.
+
+### 2. Plain entity_translucent can trigger expensive quad sorting
+Minecraft's `entityTranslucent` RenderType is upload-sorted. BufferBuilder builds sorting-point arrays for translucent quads before upload. Palladium's nominal `minecraft:solid` pack-layer mapping uses `entityTranslucent`, so otherwise-solid suit layers can pay both blending and translucent sorting.
+
+0.1.18 handles this conservatively at batch flush:
+- A binary-alpha texture is only a *candidate* for cutout.
+- HeroStand also tracks the actual per-vertex alpha submitted during that frame.
+- Only when texture alpha **and** vertex alpha are binary does the batch flush as `entityCutoutNoCull`.
+- If any vertex uses partial alpha, the original `entityTranslucent` RenderType is kept.
+- This avoids breaking intentional fade/tint layers while removing sorting/blending from genuinely solid layers.
+
+### 3. 0.1.17 native-routing gate was too broad
+0.1.17 treated every generic Palladium `PackRenderLayer` as native-only. That restored correctness but unnecessarily sent many ordinary suits through Palladium's full SuitStandRenderer/provider path.
+
+0.1.18 narrows that:
+- **Custom base armor model layers remain native-only.** This is the rule that keeps Mark One correct.
+- Known Palladium `PackRenderLayer` objects are allowed back onto HeroStand's lightweight path because HeroStand still invokes Palladium's own layer renderer with a real SuitStand DataContext.
+- Unknown/custom layer classes remain native-only.
+- This avoids paying full native renderer/provider overhead for ordinary pack layers while preserving Mark One's corrected base-model routing.
+
+0.1.18 validation:
+- Confirm **Mark One remains fixed** before benchmarking.
+- Repeat the same mixed-suit wall and record FPS, GPU%, and allocation rate.
+- Pay particular attention to allocation rate: binary `entityTranslucent` layers should no longer create translucent quad-sorting work.
+- Test genuinely translucent/glass/fading suits to ensure partial alpha still blends.
+- Test glowing/thruster effects; emissive/glow RenderTypes are not demoted by this optimization.
+- Verify distance and wall occlusion remain unchanged.
+
+If 0.1.18 still leaves the mixed wall GPU-bound with little improvement, stop spending time on lookup/cache micro-optimizations. The next architecture should split HeroStand into:
+- a **static opaque/cutout suit pass** rebuilt only when equipment/light/resources change and rendered in region/chunk-style batches, and
+- a **small live effects pass** only for genuinely animated/translucent Palladium layers.
+
+That is closer to how Minecraft's fast chunk/static geometry path works and avoids treating every static display as a fully dynamic entity renderer every frame.
 
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
@@ -471,7 +535,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.16 results, and current 0.1.17 batch-first/native-compat build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.17 results, and current 0.1.18 alpha-aware build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -496,7 +560,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `render/0.1.17-batch-first-native-compat` for the current test artifact; keep `render/0.1.16-cache-lifecycle` as the no-gain VBO/cache comparison, `render/0.1.14-gpu-backends` for backend/failover history, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
+3. Use `render/0.1.18-alpha-aware` for the current test artifact; keep `render/0.1.17-batch-first-native-compat` as the Mark One-fixed batching comparison, `render/0.1.16-cache-lifecycle` as the no-gain VBO/cache comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
