@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.blaze3d.vertex.VertexSorting;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.ShaderInstance;
@@ -15,6 +16,7 @@ import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import org.joml.Matrix4f;
+import org.joml.Vector4f;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -29,9 +31,9 @@ import java.util.Map;
  * (base armor + known-static pack layers) in one pass. The snapshot is then reused for every stand
  * wearing the same suit under the same packed-light value.
  *
- * True translucent/dynamic visuals are never frozen: if capture sees a RenderType that still needs
- * translucent sorting after conservative alpha classification, the snapshot is rejected and that
- * suit remains on Palladium's live renderer.
+ * Dynamic visuals stay live, but static translucent geometry is supported. HeroStand keeps
+ * Minecraft's BufferBuilder.SortState for sorted RenderTypes and regenerates only the index order
+ * for the current camera before drawing. Vertex geometry/model emission remains cached.
  */
 final class StaticSuitSnapshotCache implements AutoCloseable {
     enum BuildResult {
@@ -368,20 +370,8 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             for (Bucket bucket : buckets.values()) {
                 bucket.drawType =
                         resolver.resolve(bucket.originalType, bucket.partialVertexAlpha);
-
-                /*
-                 * 0.2.3 proved that freezing camera-sorted translucent output can produce visible
-                 * screen/sky artifacts. Runtime Palladium textures now get a one-time GPU alpha
-                 * inspection first; if a layer still genuinely requires translucent sorting,
-                 * keep it live rather than caching a stale sorted VBO.
-                 */
-                if (resolver.requiresSorting(bucket.drawType)) {
-                    safe = false;
-                    rejectReason = "sorted:" + shortType(bucket.drawType);
-                    return false;
-                }
-
-                bucket.sortBeforeUpload = false;
+                bucket.sortBeforeUpload =
+                        resolver.requiresSorting(bucket.drawType);
             }
 
             return true;
@@ -389,14 +379,6 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
         String rejectReason() {
             return rejectReason;
-        }
-
-        private static String shortType(RenderType type) {
-            String value = type.toString();
-            if (value.length() > 24) {
-                value = value.substring(0, 24);
-            }
-            return value;
         }
 
         long signature() {
@@ -429,19 +411,41 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
             try {
                 for (Bucket bucket : buckets.values()) {
+                    BufferBuilder.SortState sortState = null;
+
+                    if (bucket.sortBeforeUpload) {
+                        /*
+                         * Same strategy vanilla uses for translucent chunks: capture the quad
+                         * centers/SortState once, upload the vertex data once, and later rebuild
+                         * only the index order for the current camera.
+                         */
+                        bucket.builder.setQuadSorting(
+                                VertexSorting.byDistance(0.0F, 0.0F, 0.0F)
+                        );
+                        sortState = bucket.builder.getSortState();
+                    }
+
                     BufferBuilder.RenderedBuffer rendered =
                             bucket.builder.endOrDiscardIfEmpty();
                     if (rendered == null) continue;
 
-                    VertexBuffer vbo =
-                            new VertexBuffer(VertexBuffer.Usage.STATIC);
+                    VertexBuffer.Usage usage = sortState == null
+                            ? VertexBuffer.Usage.STATIC
+                            : VertexBuffer.Usage.DYNAMIC;
+                    VertexBuffer vbo = new VertexBuffer(usage);
 
                     try {
                         vbo.bind();
                         vbo.upload(rendered);
                         VertexBuffer.unbind();
 
-                        result.add(new MeshPart(bucket.drawType, vbo));
+                        result.add(
+                                new MeshPart(
+                                        bucket.drawType,
+                                        vbo,
+                                        sortState
+                                )
+                        );
                     } catch (Throwable failure) {
                         VertexBuffer.unbind();
                         vbo.close();
@@ -618,12 +622,28 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
         }
 
         void draw(PoseStack worldPose) {
+            Matrix4f localToCamera = worldPose.last().pose();
             Matrix4f modelView =
                     new Matrix4f(RenderSystem.getModelViewMatrix())
-                            .mul(worldPose.last().pose());
+                            .mul(localToCamera);
+
+            /*
+             * BlockEntityRenderDispatcher has already translated world space so the camera is at
+             * the origin. Invert this stand's local transform to obtain the camera position in the
+             * exact local coordinates used by the captured Palladium vertices.
+             */
+            Vector4f localCamera = new Vector4f(0.0F, 0.0F, 0.0F, 1.0F);
+            new Matrix4f(localToCamera)
+                    .invert()
+                    .transform(localCamera);
 
             for (MeshPart part : parts) {
-                part.draw(modelView);
+                part.draw(
+                        modelView,
+                        localCamera.x(),
+                        localCamera.y(),
+                        localCamera.z()
+                );
             }
         }
 
@@ -638,13 +658,30 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
     private static final class MeshPart implements AutoCloseable {
         private final RenderType renderType;
         private final VertexBuffer vbo;
+        private final BufferBuilder.SortState sortState;
+        private final BufferBuilder indexBuilder;
 
-        MeshPart(RenderType renderType, VertexBuffer vbo) {
+        MeshPart(RenderType renderType,
+                 VertexBuffer vbo,
+                 BufferBuilder.SortState sortState) {
             this.renderType = renderType;
             this.vbo = vbo;
+            this.sortState = sortState;
+            this.indexBuilder = sortState == null
+                    ? null
+                    : new BufferBuilder(
+                            Math.max(256, renderType.bufferSize())
+                    );
         }
 
-        void draw(Matrix4f modelView) {
+        void draw(Matrix4f modelView,
+                  float cameraX,
+                  float cameraY,
+                  float cameraZ) {
+            if (sortState != null) {
+                resort(cameraX, cameraY, cameraZ);
+            }
+
             renderType.setupRenderState();
             try {
                 ShaderInstance shader = RenderSystem.getShader();
@@ -662,6 +699,37 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             } finally {
                 VertexBuffer.unbind();
                 renderType.clearRenderState();
+            }
+        }
+
+        /**
+         * Rebuild only translucent indices. VertexBuffer.upload() detects the index-only
+         * RenderedBuffer generated by restoreSortState(), so the cached vertex buffer is untouched.
+         */
+        private void resort(float cameraX,
+                            float cameraY,
+                            float cameraZ) {
+            indexBuilder.begin(
+                    renderType.mode(),
+                    renderType.format()
+            );
+            indexBuilder.restoreSortState(sortState);
+            indexBuilder.setQuadSorting(
+                    VertexSorting.byDistance(
+                            cameraX,
+                            cameraY,
+                            cameraZ
+                    )
+            );
+
+            BufferBuilder.RenderedBuffer sorted =
+                    indexBuilder.end();
+
+            vbo.bind();
+            try {
+                vbo.upload(sorted);
+            } finally {
+                VertexBuffer.unbind();
             }
         }
 
