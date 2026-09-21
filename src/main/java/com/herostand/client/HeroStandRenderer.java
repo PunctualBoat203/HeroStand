@@ -150,20 +150,25 @@ public final class HeroStandRenderer
                                             packedLight,
                                             gameTime,
                                             poseStack,
-                                            (localPose, captureSource, samplePartialTick) ->
-                                                    minecraft
-                                                            .getEntityRenderDispatcher()
-                                                            .render(
-                                                                    suitContext,
-                                                                    0.0D,
-                                                                    0.0D,
-                                                                    0.0D,
-                                                                    0.0F,
-                                                                    samplePartialTick,
-                                                                    localPose,
-                                                                    captureSource,
-                                                                    packedLight
-                                                            )
+                                            (localPose, captureSource, samplePartialTick) -> {
+                                                /*
+                                                 * Capture only Palladium's actual SuitStandRenderer
+                                                 * output. Do not recurse through EntityRenderDispatcher:
+                                                 * dispatcher extras/wrapping are world-render concerns,
+                                                 * not part of the reusable suit visual.
+                                                 */
+                                                minecraft
+                                                        .getEntityRenderDispatcher()
+                                                        .getRenderer(suitContext)
+                                                        .render(
+                                                                suitContext,
+                                                                0.0F,
+                                                                samplePartialTick,
+                                                                localPose,
+                                                                captureSource,
+                                                                packedLight
+                                                        );
+                                            }
                                     );
 
                             if (result == StaticSuitSnapshotCache.BuildResult.DRAWN) {
@@ -335,22 +340,28 @@ public final class HeroStandRenderer
                 : (snapshotDraws * 100.0D) / statRenderCalls;
 
         int entries = 0;
+        String reject = "none";
         synchronized (ACTIVE_RENDERERS) {
             for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
                 entries += renderer.snapshots.size();
+                String candidate = renderer.snapshots.lastRejectReason();
+                if (!"none".equals(candidate)) {
+                    reject = candidate;
+                }
             }
         }
 
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.3 snap=%.1f%% hit=%d build=%d live=%d dyn=%d cap=%d cache=%d",
+                "HeroStand 0.2.4 snap=%.1f%% hit=%d build=%d live=%d dyn=%d cap=%d cache=%d why=%s",
                 hitPercent,
                 statSnapshotHits,
                 statSnapshotBuildDraws,
                 statLivePalladium,
                 statSafetyRejects,
                 statCaptureRejects,
-                entries
+                entries,
+                reject
         );
     }
 
