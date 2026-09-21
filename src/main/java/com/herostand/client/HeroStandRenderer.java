@@ -343,7 +343,7 @@ public final class HeroStandRenderer
 
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.2 snap=%.1f%% hit=%d build=%d live=%d dyn=%d cap=%d cache=%d",
+                "HeroStand 0.2.3 snap=%.1f%% hit=%d build=%d live=%d dyn=%d cap=%d cache=%d",
                 hitPercent,
                 statSnapshotHits,
                 statSnapshotBuildDraws,
