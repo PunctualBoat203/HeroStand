@@ -361,13 +361,14 @@ final class PalladiumRenderBridge {
         if (layer == null) return false;
 
         if (packRenderLayerClass != null && packRenderLayerClass.isInstance(layer)) {
-            // A default PackRenderLayer may select a custom model layer dynamically. Rather than
-            // guessing scale/pivots, let Palladium own the whole transform for these layers.
-            Object modelLookup = packModelLookupField.get(layer);
-            Object resolvedType = skinTypedGet.invoke(modelLookup, entity);
-            // Even HUMANOID PackRenderLayer entries can select arbitrary custom model layers,
-            // so any generic PackRenderLayer is native-routed for correctness.
-            return true;
+            /*
+             * Important 0.1.18 correction: PackRenderLayer itself is not a reason to force the
+             * expensive native SuitStandRenderer. HeroStand invokes Palladium's own layer.render
+             * method with a real SuitStand DataContext, so custom model-layer selection remains
+             * Palladium-owned. Mark One's regression came from its custom BASE armor model layer,
+             * which is already caught earlier by rendererRequiresNative(...).
+             */
+            return false;
         }
 
         if (compoundPackRenderLayerClass != null
