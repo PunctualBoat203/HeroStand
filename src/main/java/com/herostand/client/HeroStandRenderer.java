@@ -17,7 +17,6 @@ import net.minecraft.client.renderer.entity.ArmorStandRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Rotations;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.decoration.ArmorStand;
@@ -33,10 +32,8 @@ import java.util.Map;
 
 public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlockEntity> {
     /*
-     * Visible stands are the expensive stress case. When the camera is stationary, there is no
-     * reason to re-run the same clear-air visibility ray every 8 ticks for every stand. Keep
-     * occluded stands fairly responsive, and force fast refreshes whenever the camera actually
-     * moves. A per-position spread prevents a whole wall of stands from refreshing on one tick.
+     * Distance and wall occlusion are already proven useful by user testing. Keep those rules
+     * independent from the GPU backend so a backend soft-failure never disables culling.
      */
     private static final long VISIBLE_REFRESH_BASE_TICKS = 16L;
     private static final long VISIBLE_REFRESH_SPREAD_TICKS = 12L;
@@ -45,46 +42,42 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     private static final long MOVING_REFRESH_TICKS = 2L;
     private static final double CAMERA_MOVE_REFRESH_SQR = 0.50D * 0.50D;
 
-    // Palladium's SuitStandRenderer applies these exact values.
+    // Used only by HeroStand's two manual Palladium paths. The native compatibility backend lets
+    // Palladium's SuitStandRenderer apply these transforms itself.
     private static final float PALLADIUM_SUIT_SCALE = 0.9375F;
     private static final double PALLADIUM_SUIT_Y_OFFSET = -0.0625D;
-    private static final Rotations ZERO_POSE = new Rotations(0.0F, 0.0F, 0.0F);
 
     private static final Vec3[] VISIBILITY_SAMPLES = {
-            new Vec3(0.50D, 1.20D, 0.50D), // chest: cheapest/common clear ray first
-            new Vec3(0.50D, 1.75D, 0.50D), // head
-            new Vec3(0.50D, 0.60D, 0.50D), // legs
-            new Vec3(0.22D, 1.20D, 0.50D), // left side
-            new Vec3(0.78D, 1.20D, 0.50D), // right side
-            new Vec3(0.50D, 1.20D, 0.22D), // front/back partial visibility
+            new Vec3(0.50D, 1.20D, 0.50D),
+            new Vec3(0.50D, 1.75D, 0.50D),
+            new Vec3(0.50D, 0.60D, 0.50D),
+            new Vec3(0.22D, 1.20D, 0.50D),
+            new Vec3(0.78D, 1.20D, 0.50D),
+            new Vec3(0.50D, 1.20D, 0.22D),
             new Vec3(0.50D, 1.20D, 0.78D)
     };
 
     /**
-     * Palladium's real SuitStandRenderer uses a normal HumanoidModel-shaped parent, not
-     * ArmorStandArmorModel. That distinction matters for custom suit models because
-     * HumanoidModel.copyPropertiesTo(...) copies part positions as well as rotations.
-     *
-     * ArmorStandArmorModel offsets the head to Y=1 and the legs to Y=11, while Palladium's
-     * SuitStandBasePlateModel uses normal humanoid positions (head Y=0, legs Y=12). Most armor
-     * tolerates that difference, but some custom helmet/model layers amplify it into visibly
-     * detached geometry. Use a standard humanoid parent to mirror Palladium's suit stand.
+     * The manual Palladium paths use normal humanoid pivots because Palladium's
+     * SuitStandBasePlateModel is built from HumanoidModel.createMesh(...), not
+     * ArmorStandArmorModel's shifted pivots.
      */
     private final HumanoidModel<ArmorStand> parentModel;
     private final ArmorStandArmorModel innerArmorModel;
     private final ArmorStandArmorModel outerArmorModel;
     private final HumanoidArmorLayer<ArmorStand, HumanoidModel<ArmorStand>, ArmorStandArmorModel> armorLayer;
+
     private final PalladiumRenderBridge palladium = new PalladiumRenderBridge();
+    private final PalladiumSuitStandBridge palladiumSuitStand = new PalladiumSuitStandBridge();
+    private final GpuRenderRouter gpuRouter = new GpuRenderRouter();
 
     private final Map<Long, OcclusionEntry> occlusionCache = new HashMap<>();
     private Level occlusionLevel;
 
-    private ArmorStand fastRenderContext;
+    private ArmorStand preparedPalladiumContext;
     private ArmorStand fallbackRenderContext;
 
     public HeroStandRenderer(BlockEntityRendererProvider.Context context) {
-        // ModelLayers.PLAYER has the same normal humanoid pivots Palladium's
-        // SuitStandBasePlateModel is built from, without requiring a hard Palladium dependency.
         this.parentModel = new HumanoidModel<>(context.bakeLayer(ModelLayers.PLAYER));
 
         RenderLayerParent<ArmorStand, HumanoidModel<ArmorStand>> parent =
@@ -111,6 +104,8 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                 outerArmorModel,
                 Minecraft.getInstance().getModelManager()
         );
+
+        resetParentModel();
     }
 
     @Override
@@ -119,96 +114,199 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         Level level = stand.getLevel();
         if (level == null || Minecraft.getInstance().player == null || !hasArmor(stand)) return;
 
-        boolean fastPath = palladium.canUseFastPath(stand);
-        ArmorStand renderContext = fastPath
-                ? prepareFastRenderContext(stand, level)
-                : prepareFallbackRenderContext(stand, level);
+        boolean palladiumArmor = palladium.canUseFastPath(stand) && palladiumSuitStand.isAvailable();
+        ArmorStand palladiumContext = palladiumArmor
+                ? preparePalladiumRenderContext(stand, level)
+                : null;
 
         float rotation = stand.getBlockState().getValue(HeroStandBlock.FACING).toYRot();
 
         poseStack.pushPose();
-        poseStack.translate(0.5D, 0.125D, 0.5D);
-        poseStack.mulPose(Axis.YP.rotationDegrees(-rotation));
+        try {
+            poseStack.translate(0.5D, 0.125D, 0.5D);
+            poseStack.mulPose(Axis.YP.rotationDegrees(-rotation));
 
-        if (fastPath) {
-            renderPalladiumFastPath(renderContext, partialTick, poseStack, buffers, packedLight);
-        } else {
-            Minecraft.getInstance().getEntityRenderDispatcher().render(
-                    renderContext, 0.0D, 0.0D, 0.0D, 0.0F,
-                    partialTick, poseStack, buffers, packedLight
-            );
+            boolean rendered = false;
+
+            if (palladiumContext != null) {
+                resetParentModel();
+
+                for (GpuRenderRouter.Backend backend : gpuRouter.orderedBackends()) {
+                    if (!gpuRouter.isHealthy(backend)) continue;
+
+                    try {
+                        boolean success = switch (backend) {
+                            case NVIDIA_FAST -> renderNvidiaFastPath(
+                                    palladiumContext, partialTick, poseStack, buffers, packedLight
+                            );
+                            case AMD_BALANCED -> renderAmdBalancedPath(
+                                    palladiumContext, partialTick, poseStack, buffers, packedLight
+                            );
+                            case GENERIC_NATIVE -> renderNativePalladiumPath(
+                                    palladiumContext, partialTick, poseStack, buffers, packedLight
+                            );
+                        };
+
+                        if (success) {
+                            gpuRouter.recordSuccess(backend);
+                            rendered = true;
+                            break;
+                        }
+                    } catch (Throwable failure) {
+                        gpuRouter.recordSoftFailure(backend, failure);
+                    }
+                }
+            }
+
+            if (!rendered) {
+                renderVanillaFallback(
+                        prepareFallbackRenderContext(stand, level),
+                        partialTick,
+                        poseStack,
+                        buffers,
+                        packedLight
+                );
+            }
+        } finally {
+            poseStack.popPose();
         }
-
-        poseStack.popPose();
     }
 
     /**
-     * Mirrors Palladium's SuitStandRenderer transform but skips the full living-entity renderer.
-     * The static neutral pose is prepared once when the reusable fast render context is created.
+     * Aggressive path preferred on NVIDIA hardware. It keeps the direct base-armor path and the
+     * static Palladium layer accelerator from 0.1.13, but now feeds them a real client-only
+     * Palladium SuitStand entity rather than a plain ArmorStand.
      */
-    private void renderPalladiumFastPath(ArmorStand renderContext, float partialTick,
+    private boolean renderNvidiaFastPath(ArmorStand renderContext, float partialTick,
                                          PoseStack poseStack, MultiBufferSource buffers,
                                          int packedLight) {
         poseStack.pushPose();
+        try {
+            applyManualPalladiumTransform(poseStack);
 
-        // SuitStandRenderer.setupRotations(...), scale(...), then LivingEntityRenderer's
-        // model-space flip/translation.
+            boolean directArmor = palladium.renderArmorDirect(
+                    renderContext,
+                    parentModel,
+                    innerArmorModel,
+                    outerArmorModel,
+                    poseStack,
+                    buffers,
+                    packedLight,
+                    partialTick
+            );
+
+            // Direct rendering is deliberately preflighted by PalladiumRenderBridge. If a model
+            // needs a path we cannot reproduce safely, try the next backend before drawing it.
+            if (!directArmor) return false;
+
+            if (!palladium.renderPackLayers(
+                    renderContext,
+                    parentModel,
+                    poseStack,
+                    buffers,
+                    packedLight,
+                    partialTick,
+                    true
+            )) {
+                throw new IllegalStateException("Accelerated Palladium pack-layer path failed");
+            }
+
+            return true;
+        } finally {
+            poseStack.popPose();
+        }
+    }
+
+    /**
+     * Compatibility/performance balance preferred on AMD. It avoids HeroStand's direct armor
+     * renderer and static-layer substitution, while still skipping the full entity renderer.
+     * Palladium's own HumanoidArmorLayer hooks and pack layers do the visual work.
+     */
+    private boolean renderAmdBalancedPath(ArmorStand renderContext, float partialTick,
+                                          PoseStack poseStack, MultiBufferSource buffers,
+                                          int packedLight) {
+        poseStack.pushPose();
+        try {
+            applyManualPalladiumTransform(poseStack);
+
+            armorLayer.render(
+                    poseStack, buffers, packedLight, renderContext,
+                    0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
+            );
+
+            if (!palladium.renderPackLayers(
+                    renderContext,
+                    parentModel,
+                    poseStack,
+                    buffers,
+                    packedLight,
+                    partialTick,
+                    false
+            )) {
+                throw new IllegalStateException("Balanced Palladium pack-layer path failed");
+            }
+
+            return true;
+        } finally {
+            poseStack.popPose();
+        }
+    }
+
+    /**
+     * Final Palladium safety backend. Because renderContext is an actual Palladium SuitStand,
+     * EntityRenderDispatcher selects Palladium's real SuitStandRenderer. This preserves custom
+     * model assumptions that HeroStand's manual fast paths may not understand.
+     */
+    private boolean renderNativePalladiumPath(ArmorStand renderContext, float partialTick,
+                                              PoseStack poseStack, MultiBufferSource buffers,
+                                              int packedLight) {
+        Minecraft.getInstance().getEntityRenderDispatcher().render(
+                renderContext,
+                0.0D, 0.0D, 0.0D,
+                0.0F,
+                partialTick,
+                poseStack,
+                buffers,
+                packedLight
+        );
+        return true;
+    }
+
+    private static void applyManualPalladiumTransform(PoseStack poseStack) {
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0F));
         poseStack.scale(PALLADIUM_SUIT_SCALE, PALLADIUM_SUIT_SCALE, PALLADIUM_SUIT_SCALE);
         poseStack.translate(0.0D, PALLADIUM_SUIT_Y_OFFSET, 0.0D);
         poseStack.scale(-1.0F, -1.0F, 1.0F);
         poseStack.translate(0.0D, -1.501D, 0.0D);
-
-        boolean directArmor = palladium.renderArmorDirect(
-                renderContext,
-                parentModel,
-                innerArmorModel,
-                outerArmorModel,
-                poseStack,
-                buffers,
-                packedLight,
-                partialTick
-        );
-
-        if (!directArmor) {
-            armorLayer.render(
-                    poseStack, buffers, packedLight, renderContext,
-                    0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
-            );
-        }
-
-        palladium.renderPackLayers(
-                renderContext, parentModel, poseStack, buffers, packedLight, partialTick
-        );
-
-        poseStack.popPose();
     }
 
-    private ArmorStand prepareFastRenderContext(HeroStandBlockEntity stand, Level level) {
-        if (fastRenderContext == null || fastRenderContext.level() != level) {
-            fastRenderContext = createBaseContext(level);
+    private void renderVanillaFallback(ArmorStand renderContext, float partialTick,
+                                       PoseStack poseStack, MultiBufferSource buffers,
+                                       int packedLight) {
+        Minecraft.getInstance().getEntityRenderDispatcher().render(
+                renderContext,
+                0.0D, 0.0D, 0.0D,
+                0.0F,
+                partialTick,
+                poseStack,
+                buffers,
+                packedLight
+        );
+    }
 
-            // Palladium's SuitStand constructor explicitly zeros arm/leg poses. Do the same,
-            // including head/body, so ArmorStandArmorModel copies a stable neutral mannequin pose.
-            fastRenderContext.setHeadPose(ZERO_POSE);
-            fastRenderContext.setBodyPose(ZERO_POSE);
-            fastRenderContext.setLeftArmPose(ZERO_POSE);
-            fastRenderContext.setRightArmPose(ZERO_POSE);
-            fastRenderContext.setLeftLegPose(ZERO_POSE);
-            fastRenderContext.setRightLegPose(ZERO_POSE);
+    private ArmorStand preparePalladiumRenderContext(HeroStandBlockEntity stand, Level level) {
+        ArmorStand context = palladiumSuitStand.getOrCreate(level);
+        if (context == null) return null;
 
-            // This standard humanoid parent mirrors Palladium's SuitStandBasePlateModel pivots.
-            // Prepare it once in a stable neutral pose; pack/custom armor models copy these
-            // positions and rotations during rendering.
-            parentModel.prepareMobModel(fastRenderContext, 0.0F, 0.0F, 0.0F);
-            parentModel.setupAnim(fastRenderContext, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F);
-
+        if (preparedPalladiumContext != context) {
+            preparedPalladiumContext = context;
             palladium.resetSessionCache();
+            gpuRouter.resetFailures();
         }
 
-        copyEquipment(stand, fastRenderContext);
-        pinRotationState(fastRenderContext);
-        return fastRenderContext;
+        copyEquipment(stand, context);
+        pinRotationState(context);
+        return context;
     }
 
     private ArmorStand prepareFallbackRenderContext(HeroStandBlockEntity stand, Level level) {
@@ -247,6 +345,61 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         context.xRotO = 0.0F;
     }
 
+    /**
+     * Mirror Palladium SuitStandBasePlateModel's neutral humanoid pivots explicitly. Avoid running
+     * HumanoidModel.setupAnim here because that method adds normal living-entity idle/limb state
+     * that a static SuitStand does not use.
+     */
+    private void resetParentModel() {
+        parentModel.head.x = 0.0F;
+        parentModel.head.y = 0.0F;
+        parentModel.head.z = 0.0F;
+        parentModel.head.xRot = 0.0F;
+        parentModel.head.yRot = 0.0F;
+        parentModel.head.zRot = 0.0F;
+
+        parentModel.hat.copyFrom(parentModel.head);
+        parentModel.hat.visible = false;
+
+        parentModel.body.x = 0.0F;
+        parentModel.body.y = 0.0F;
+        parentModel.body.z = 0.0F;
+        parentModel.body.xRot = 0.0F;
+        parentModel.body.yRot = 0.0F;
+        parentModel.body.zRot = 0.0F;
+
+        parentModel.rightArm.x = -5.0F;
+        parentModel.rightArm.y = 2.0F;
+        parentModel.rightArm.z = 0.0F;
+        parentModel.rightArm.xRot = 0.0F;
+        parentModel.rightArm.yRot = 0.0F;
+        parentModel.rightArm.zRot = 0.0F;
+
+        parentModel.leftArm.x = 5.0F;
+        parentModel.leftArm.y = 2.0F;
+        parentModel.leftArm.z = 0.0F;
+        parentModel.leftArm.xRot = 0.0F;
+        parentModel.leftArm.yRot = 0.0F;
+        parentModel.leftArm.zRot = 0.0F;
+
+        parentModel.rightLeg.x = -1.9F;
+        parentModel.rightLeg.y = 12.0F;
+        parentModel.rightLeg.z = 0.0F;
+        parentModel.rightLeg.xRot = 0.0F;
+        parentModel.rightLeg.yRot = 0.0F;
+        parentModel.rightLeg.zRot = 0.0F;
+
+        parentModel.leftLeg.x = 1.9F;
+        parentModel.leftLeg.y = 12.0F;
+        parentModel.leftLeg.z = 0.0F;
+        parentModel.leftLeg.xRot = 0.0F;
+        parentModel.leftLeg.yRot = 0.0F;
+        parentModel.leftLeg.zRot = 0.0F;
+
+        parentModel.setAllVisible(true);
+        parentModel.hat.visible = false;
+    }
+
     @Override
     public boolean shouldRender(HeroStandBlockEntity stand, Vec3 cameraPos) {
         if (!hasArmor(stand)) return false;
@@ -254,7 +407,6 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         int viewDistance = effectiveRenderDistance();
         double viewDistanceSqr = (double) viewDistance * viewDistance;
 
-        // Avoid allocating Vec3.atCenterOf(...) for every stand on every render frame.
         BlockPos pos = stand.getBlockPos();
         double dx = cameraPos.x - (pos.getX() + 0.5D);
         double dy = cameraPos.y - (pos.getY() + 0.5D);
@@ -267,6 +419,8 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         if (level != occlusionLevel) {
             occlusionLevel = level;
             occlusionCache.clear();
+            palladiumSuitStand.reset();
+            preparedPalladiumContext = null;
         }
 
         long gameTime = level.getGameTime();
@@ -286,8 +440,6 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                 return cached.visible;
             }
 
-            // When moving into/out of cover, refresh quickly regardless of the longer static
-            // visible-cache interval so wall occlusion keeps the same practical behavior.
             if (cameraMovedEnough && age < MOVING_REFRESH_TICKS) {
                 return cached.visible;
             }
@@ -310,11 +462,12 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     }
 
     private boolean isSuitVisible(Level level, HeroStandBlockEntity stand, Vec3 cameraPos) {
+        BlockPos pos = stand.getBlockPos();
         for (Vec3 sample : VISIBILITY_SAMPLES) {
             Vec3 target = new Vec3(
-                    stand.getBlockPos().getX() + sample.x,
-                    stand.getBlockPos().getY() + sample.y,
-                    stand.getBlockPos().getZ() + sample.z
+                    pos.getX() + sample.x,
+                    pos.getY() + sample.y,
+                    pos.getZ() + sample.z
             );
             if (hasClearLine(level, stand, cameraPos, target)) return true;
         }
