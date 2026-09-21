@@ -401,7 +401,15 @@ final class PalladiumNativeBridge {
                         }
                     }
                 } catch (Throwable failure) {
-                    throw new LayerRenderFailure(failure);
+                    try {
+                        renderLayerLive(
+                                layer, dataContext, suitStand,
+                                outerPose, buffers, packedLight, partialTick);
+                        stats.live++;
+                        stats.dynamic++;
+                    } catch (Throwable liveFailure) {
+                        throw new LayerRenderFailure(liveFailure);
+                    }
                 }
             };
 
@@ -419,6 +427,34 @@ final class PalladiumNativeBridge {
             return PackPassStats.FAILED;
         } finally {
             suitStand.tickCount = originalTick;
+        }
+    }
+
+    boolean renderPackLayersLive(ArmorStand suitStand,
+                                 PoseStack outerPose,
+                                 MultiBufferSource buffers,
+                                 int packedLight,
+                                 float partialTick) {
+        if (!isInstalled() || suitStand == null || parentModel == null) {
+            return false;
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            BiConsumer<Object, Object> consumer = (dataContext, layer) -> {
+                try {
+                    renderLayerLive(
+                            layer, dataContext, suitStand,
+                            outerPose, buffers, packedLight, partialTick);
+                } catch (Throwable failure) {
+                    throw new LayerRenderFailure(failure);
+                }
+            };
+
+            forEachPackLayer.invoke(null, suitStand, consumer);
+            return true;
+        } catch (Throwable failure) {
+            return false;
         }
     }
 
