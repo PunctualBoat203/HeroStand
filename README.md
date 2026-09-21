@@ -8,11 +8,15 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.5**
+Current test build: **0.2.6**
 
 ## IMPORTANT — current development line
 
 Active renderer rebuild branch:
+
+`rebuild/0.2.6-split-armor-layers`
+
+0.2.5 translucent-index experiment branch:
 
 `rebuild/0.2.5-translucent-index-cache`
 
@@ -51,7 +55,8 @@ Known reference points:
 - **0.2.2**: unknown-layer rejection was removed, but the user's F3 test still showed **0.0% snapshot usage**, **cache=0**, **cap=106**, about **48 FPS / 83% GPU**, and it introduced visible sky flicker. The two-pass capture/sorting-rejection design is therefore abandoned.
 - **0.2.3**: finally produced a snapshot, but only **1 cached entry / ~1.9% snapshot usage** in the wall test. User still saw roughly **46–48 FPS**, **~81% GPU**, and a new top-of-screen flicker/artifact. F3 showed **cap=133 / cache=1**, so nearly every candidate still failed capture.
 - **0.2.4**: direct renderer capture + rejection diagnostics. User test still showed **0.0% snapshot usage / cache=0 / cap=101**, with `why=sorted:RenderType[palladium:arm...]`. Performance remained about **51 FPS / 79% GPU / ~521 MiB/s allocation**. The black/flickering top-of-screen artifact also remained even with zero cached snapshots, strongly implicating the runtime OpenGL texture-readback experiment rather than snapshot replay.
-- **0.2.5**: removes all runtime `glGetTexImage`/texture-binding inspection and implements Minecraft-style cached translucent geometry: vertices are uploaded once, `BufferBuilder.SortState` is retained, and only the translucent index order is regenerated/re-uploaded for the current camera before each draw.
+- **0.2.5**: **crashed on world load/render**. PunctualBoat supplied the crash report. The failure is directly in `StaticSuitSnapshotCache$MeshPart.resort()` while `VertexBuffer.upload()` consumes HeroStand's index-only re-sort buffer (`MemoryUtil.memSlice` -> `BufferBuilder.RenderedBuffer` -> `VertexBuffer`). The user also saw immediate black/top-screen artifacting before the crash. **Do not reuse the 0.2.5 translucent index-resort implementation.**
+- **0.2.6**: stability-first split renderer. Cache only Palladium's native `HumanoidArmorLayer` / base armor pass. Keep Palladium's `PackRenderLayerRenderer` live every frame for sorted translucent add-on layers, glow, thrusters, lightning, and third-party pack-layer behavior. Removes the broken index-only re-sort path and keeps runtime OpenGL texture readback removed.
 
 Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
 
@@ -134,7 +139,23 @@ These stay on Palladium's live native renderer:
 - any capture path that performs unsupported/non-buffered behavior;
 - any snapshot build that fails.
 
-Important 0.2.5 correction: a RenderType requiring camera-relative translucent sorting is **no longer automatically live-only**. Static translucent geometry can be cached while its index order is re-sorted for the current camera.
+0.2.5 translucent snapshot correction was **reverted after a confirmed HeroStand crash**. Do not regenerate/re-upload index-only translucent buffers through the old `VertexBuffer.upload()` path.
+
+### 0.2.6 split armor/layer architecture
+
+0.2.6 no longer treats a Palladium suit as one snapshot unit.
+
+- Resolve the real Palladium `SuitStandRenderer` and its injected render-layer list.
+- Cache only the real `HumanoidArmorLayer`, preserving Palladium's armor mixin/custom model selection.
+- Render the real `PackRenderLayerRenderer` live after the cached base armor.
+- The base armor cache never performs runtime GL texture readback.
+- The base armor cache never performs per-frame translucent index re-sorting.
+- Known `ExtraAnimatedModel` base armor remains live instead of being frozen.
+- Render-layer lookup finds the `LivingEntityRenderer` layer list by **field type**, not the development field name, so SRG production mappings do not break it.
+- RenderType sort policy no longer reflects the private `sortOnUpload` field. Palladium's own base armor RenderType is known from source to be created with `sortOnUpload=false`.
+- Palladium's default pack-layer `minecraft:solid` intentionally uses `RenderType.entityTranslucent(...)`; those pack layers therefore stay live in 0.2.6 instead of blocking the base armor cache.
+
+This is a deliberate partial-cache design: prioritize visual correctness and stability, then measure how much of the wall cost is in base armor versus pack layers before optimizing the live layer half.
 
 Important correction: **unknown/custom render-layer classes are no longer rejected merely because HeroStand does not recognize their Java class name.** Palladium explicitly supports third-party render-layer parsers. Unknown/add-on layers may attempt native capture; known animated behavior remains live.
 
