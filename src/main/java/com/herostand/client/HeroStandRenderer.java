@@ -30,12 +30,12 @@ import java.util.WeakHashMap;
 /**
  * HeroStand 0.2 renderer.
  *
- * Ground-up rules:
- * - Palladium owns Palladium visuals. HeroStand does not manually recreate Palladium model math.
- * - Known-static suits are captured from Palladium's real SuitStandRenderer and reused.
- * - Dynamic/translucent/unknown suits stay live on Palladium's renderer.
+ * Stable 0.2.9 rules:
+ * - Palladium/Gecko/Satsu own every visual render. HeroStand never probes or duplicates a layer.
+ * - No custom VBOs, texture readback, snapshot replay, or translucent sorting.
+ * - Cache only non-visual bookkeeping: Palladium layer discovery plans and condition contexts.
  * - Non-Palladium armor uses the vanilla ArmorStand renderer.
- * - Proven 0.1.9 distance/wall culling stays independent from visual rendering.
+ * - Proven distance/wall culling stays independent from visual rendering.
  */
 public final class HeroStandRenderer
         implements BlockEntityRenderer<HeroStandBlockEntity> {
@@ -60,19 +60,12 @@ public final class HeroStandRenderer
             Collections.newSetFromMap(new WeakHashMap<>());
 
     private static long statRenderCalls;
-    private static long statSnapshotHits;
-    private static long statSnapshotBuildDraws;
-    private static long statLivePalladium;
+    private static long statPalladiumFrames;
     private static long statVanillaFallback;
-    private static long statSafetyRejects;
-    private static long statCaptureRejects;
-    private static long statBuildDeferred;
-    private static long statBlockedDynamic;
+    private static long statBridgeFallbacks;
 
     private final PalladiumNativeBridge palladium =
             new PalladiumNativeBridge();
-    private final StaticSuitSnapshotCache snapshots =
-            new StaticSuitSnapshotCache();
 
     private final Map<Long, OcclusionEntry> occlusionCache =
             new HashMap<>();
@@ -121,114 +114,52 @@ public final class HeroStandRenderer
             poseStack.mulPose(
                     Axis.YP.rotationDegrees(-rotation));
 
-            long gameTime = level.getGameTime();
-
             if (palladium.isPalladiumSuit(stand)) {
                 ArmorStand suitContext =
                         palladium.prepareContext(stand, level);
 
                 if (suitContext != null) {
-                    boolean baseArmorDrawn = false;
-
                     /*
-                     * 0.2.6 caches ONLY Palladium's native HumanoidArmorLayer. The
-                     * PackRenderLayerRenderer remains live, so entity_translucent add-on layers,
-                     * thrusters and other effects never enter HeroStand's VBO snapshot.
+                     * One visual pass only.
+                     *
+                     * Base armor uses Palladium's native HumanoidArmorLayer. Satsu/Palladium/Gecko
+                     * pack layers are then invoked exactly once from a cached discovery plan.
+                     * There are no capture/probe renders in 0.2.9.
                      */
-                    if (snapshots.renderCached(
-                            stand,
-                            packedLight,
-                            gameTime,
-                            poseStack)) {
-                        statSnapshotHits++;
-                        baseArmorDrawn = true;
-                    } else if (snapshots.shouldAttemptBuild(
-                            stand,
-                            gameTime)) {
-                        if (palladium.isBaseArmorSnapshotSafe(
-                                suitContext)) {
-                            StaticSuitSnapshotCache.BuildResult result =
-                                    snapshots.renderOrBuild(
-                                            stand,
-                                            suitContext,
-                                            packedLight,
-                                            gameTime,
-                                            poseStack,
-                                            (localPose,
-                                             captureSource,
-                                             samplePartialTick) -> {
-                                                if (!palladium.renderBaseArmor(
-                                                        suitContext,
-                                                        localPose,
-                                                        captureSource,
-                                                        packedLight,
-                                                        samplePartialTick)) {
-                                                    throw new IllegalStateException(
-                                                            "Palladium base armor capture failed");
-                                                }
-                                            }
-                                    );
-
-                            if (result
-                                    == StaticSuitSnapshotCache.BuildResult.DRAWN) {
-                                statSnapshotBuildDraws++;
-                                baseArmorDrawn = true;
-                            } else if (result
-                                    == StaticSuitSnapshotCache.BuildResult.REJECTED) {
-                                statCaptureRejects++;
-                            } else {
-                                statBuildDeferred++;
-                            }
-                        } else {
-                            snapshots.markUncacheable(
-                                    stand,
-                                    gameTime);
-                            statSafetyRejects++;
-                        }
-                    } else {
-                        statBlockedDynamic++;
-                    }
-
-                    if (!baseArmorDrawn) {
-                        if (!palladium.renderBaseArmor(
-                                suitContext,
-                                poseStack,
-                                buffers,
-                                packedLight,
-                                partialTick)) {
-                            /*
-                             * Layer bridge unavailable: use Palladium's complete renderer for
-                             * correctness. This branch is reached before pack-layer rendering.
-                             */
-                            minecraft.getEntityRenderDispatcher().render(
-                                    suitContext,
-                                    0.0D,
-                                    0.0D,
-                                    0.0D,
-                                    0.0F,
-                                    partialTick,
-                                    poseStack,
-                                    buffers,
-                                    packedLight
-                            );
-                            statLivePalladium++;
-                            return;
-                        }
-                    }
-
-                    /*
-                     * Always render Palladium pack/add-on layers live. This is the part of the
-                     * renderer where Palladium intentionally uses entityTranslucent, glow,
-                     * thrusters, lightning and third-party render-layer behavior.
-                     */
-                    palladium.renderLivePackLayers(
+                    if (palladium.renderBaseArmor(
                             suitContext,
                             poseStack,
                             buffers,
                             packedLight,
-                            partialTick
+                            partialTick)
+                            && palladium.renderPackLayers(
+                            stand,
+                            suitContext,
+                            poseStack,
+                            buffers,
+                            packedLight,
+                            partialTick)) {
+                        statPalladiumFrames++;
+                        return;
+                    }
+
+                    /*
+                     * Reflection/compatibility failure only. Fall back to Palladium's normal
+                     * complete renderer on subsequent compatibility failures rather than trying
+                     * another optimization path.
+                     */
+                    statBridgeFallbacks++;
+                    minecraft.getEntityRenderDispatcher().render(
+                            suitContext,
+                            0.0D,
+                            0.0D,
+                            0.0D,
+                            0.0F,
+                            partialTick,
+                            poseStack,
+                            buffers,
+                            packedLight
                     );
-                    statLivePalladium++;
                     return;
                 }
             }
@@ -347,56 +278,52 @@ public final class HeroStandRenderer
     }
 
     static void tickCaches(long gameTime) {
-        synchronized (ACTIVE_RENDERERS) {
-            for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
-                renderer.snapshots.tick(gameTime);
-            }
-        }
+        // 0.2.9 has no visual snapshot cache to maintain.
     }
 
     static String debugLine() {
-        long snapshotDraws = statSnapshotHits + statSnapshotBuildDraws;
-        double hitPercent = statRenderCalls == 0L
-                ? 0.0D
-                : (snapshotDraws * 100.0D) / statRenderCalls;
+        long planHits = 0L;
+        long planBuilds = 0L;
+        long layerCalls = 0L;
+        int plans = 0;
+        int plannedLayers = 0;
 
-        int entries = 0;
-        String reject = "none";
         synchronized (ACTIVE_RENDERERS) {
             for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
-                entries += renderer.snapshots.size();
-                String candidate = renderer.snapshots.lastRejectReason();
-                if (!"none".equals(candidate)) {
-                    reject = candidate;
-                }
+                planHits += renderer.palladium.planHits();
+                planBuilds += renderer.palladium.planBuilds();
+                layerCalls += renderer.palladium.layerCalls();
+                plans += renderer.palladium.planCount();
+                plannedLayers += renderer.palladium.plannedLayerCount();
             }
         }
 
+        long conditionReuse =
+                PalladiumConditionContext.reusedConditionChecks();
+        long conditionFallback =
+                PalladiumConditionContext.fallbackContextBuilds();
+
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.6 armor=%.1f%% hit=%d build=%d layers=%d unsafe=%d cap=%d cache=%d why=%s",
-                hitPercent,
-                statSnapshotHits,
-                statSnapshotBuildDraws,
-                statLivePalladium,
-                statSafetyRejects,
-                statCaptureRejects,
-                entries,
-                reject
+                "HeroStand 0.2.9 planHit=%d build=%d plans=%d layers=%d calls=%d condReuse=%d condNew=%d fallback=%d",
+                planHits,
+                planBuilds,
+                plans,
+                plannedLayers,
+                layerCalls,
+                conditionReuse,
+                conditionFallback,
+                statBridgeFallbacks
         );
     }
 
     static void clearAllCaches() {
         Runnable clear = () -> {
             statRenderCalls = 0L;
-            statSnapshotHits = 0L;
-            statSnapshotBuildDraws = 0L;
-            statLivePalladium = 0L;
+            statPalladiumFrames = 0L;
             statVanillaFallback = 0L;
-            statSafetyRejects = 0L;
-            statCaptureRejects = 0L;
-            statBuildDeferred = 0L;
-            statBlockedDynamic = 0L;
+            statBridgeFallbacks = 0L;
+            PalladiumConditionContext.resetStats();
 
             synchronized (ACTIVE_RENDERERS) {
                 for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
@@ -413,7 +340,6 @@ public final class HeroStandRenderer
     }
 
     private void clearInstanceCaches() {
-        snapshots.clear();
         palladium.reset();
         occlusionCache.clear();
         vanillaFallback = null;
