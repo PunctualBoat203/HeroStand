@@ -116,6 +116,9 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         );
 
         resetParentModel();
+        parentModel.young = false;
+        innerArmorModel.young = false;
+        outerArmorModel.young = false;
 
         synchronized (ACTIVE_RENDERERS) {
             ACTIVE_RENDERERS.add(this);
@@ -148,6 +151,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         Runnable clearTask = () -> {
             SHARED_BATCH.discard();
             SHARED_BATCH.clearOptimizationCaches();
+            FastHumanoidModelRenderer.clearCache();
 
             synchronized (ACTIVE_RENDERERS) {
                 for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
@@ -312,11 +316,35 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         try {
             applyManualPalladiumTransform(poseStack);
 
-            armorLayer.render(
-                    poseStack, buffers, packedLight, renderContext,
-                    0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
+            /*
+             * The stock Palladium HumanoidArmorLayer mixin creates a new DataContext + HashMap for
+             * every armor slot every frame. On a static display that is pure churn. Prefer
+             * HeroStand's reusable direct path; its preflight guarantees false is returned before
+             * emitting vertices when an unsupported armor piece is encountered.
+             */
+            boolean directArmor = palladium.renderArmorDirect(
+                    renderContext,
+                    parentModel,
+                    innerArmorModel,
+                    outerArmorModel,
+                    poseStack,
+                    buffers,
+                    packedLight,
+                    partialTick
             );
 
+            if (!directArmor) {
+                armorLayer.render(
+                        poseStack, buffers, packedLight, renderContext,
+                        0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
+                );
+            }
+
+            /*
+             * Supported normal PackRenderLayer/SkinOverlay/compound layers reuse cached visual
+             * decisions and the allocation-free humanoid emitter. Thrusters/lightning/custom
+             * layer classes still fall through to Palladium's original implementation.
+             */
             if (!palladium.renderPackLayers(
                     renderContext,
                     parentModel,
@@ -324,7 +352,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                     buffers,
                     packedLight,
                     partialTick,
-                    false
+                    true
             )) {
                 throw new IllegalStateException("Balanced Palladium pack-layer path failed");
             }
@@ -503,6 +531,13 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
 
         parentModel.setAllVisible(true);
         parentModel.hat.visible = false;
+
+        // Manual HeroStand rendering bypasses LivingEntityRenderer, which normally updates this.
+        // A SuitStand is never a baby; leaving EntityModel.young at its default true adds extra
+        // scaling/PoseStack work and can distort custom armor models.
+        parentModel.young = false;
+        parentModel.attackTime = 0.0F;
+        parentModel.riding = false;
     }
 
     @Override
