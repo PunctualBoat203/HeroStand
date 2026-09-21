@@ -15,6 +15,7 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.client.renderer.entity.ArmorStandRenderer;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Rotations;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -30,10 +31,18 @@ import java.util.HashMap;
 import java.util.Map;
 
 public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlockEntity> {
-    private static final long VISIBLE_REFRESH_TICKS = 8L;
-    private static final long OCCLUDED_REFRESH_TICKS = 12L;
-    private static final long MOVING_REFRESH_TICKS = 4L;
-    private static final double CAMERA_MOVE_REFRESH_SQR = 0.90D * 0.90D;
+    /*
+     * Visible stands are the expensive stress case. When the camera is stationary, there is no
+     * reason to re-run the same clear-air visibility ray every 8 ticks for every stand. Keep
+     * occluded stands fairly responsive, and force fast refreshes whenever the camera actually
+     * moves. A per-position spread prevents a whole wall of stands from refreshing on one tick.
+     */
+    private static final long VISIBLE_REFRESH_BASE_TICKS = 16L;
+    private static final long VISIBLE_REFRESH_SPREAD_TICKS = 12L;
+    private static final long OCCLUDED_REFRESH_BASE_TICKS = 10L;
+    private static final long OCCLUDED_REFRESH_SPREAD_TICKS = 6L;
+    private static final long MOVING_REFRESH_TICKS = 2L;
+    private static final double CAMERA_MOVE_REFRESH_SQR = 0.50D * 0.50D;
 
     // Palladium's SuitStandRenderer applies these exact values.
     private static final float PALLADIUM_SUIT_SCALE = 0.9375F;
@@ -210,8 +219,13 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
 
         int viewDistance = effectiveRenderDistance();
         double viewDistanceSqr = (double) viewDistance * viewDistance;
-        Vec3 center = Vec3.atCenterOf(stand.getBlockPos());
-        if (cameraPos.distanceToSqr(center) > viewDistanceSqr) return false;
+
+        // Avoid allocating Vec3.atCenterOf(...) for every stand on every render frame.
+        BlockPos pos = stand.getBlockPos();
+        double dx = cameraPos.x - (pos.getX() + 0.5D);
+        double dy = cameraPos.y - (pos.getY() + 0.5D);
+        double dz = cameraPos.z - (pos.getZ() + 0.5D);
+        if (dx * dx + dy * dy + dz * dz > viewDistanceSqr) return false;
 
         Level level = stand.getLevel();
         if (level == null || Minecraft.getInstance().player == null) return false;
@@ -222,23 +236,40 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         }
 
         long gameTime = level.getGameTime();
-        long key = stand.getBlockPos().asLong();
+        long key = pos.asLong();
         OcclusionEntry cached = occlusionCache.get(key);
 
         if (cached != null) {
             long age = gameTime - cached.gameTime;
-            double cameraMove = cameraPos.distanceToSqr(cached.cameraPos);
-            boolean cameraMovedEnough = cameraMove >= CAMERA_MOVE_REFRESH_SQR;
-            long normalRefresh = cached.visible ? VISIBLE_REFRESH_TICKS : OCCLUDED_REFRESH_TICKS;
+            double cameraDx = cameraPos.x - cached.cameraX;
+            double cameraDy = cameraPos.y - cached.cameraY;
+            double cameraDz = cameraPos.z - cached.cameraZ;
+            boolean cameraMovedEnough =
+                    cameraDx * cameraDx + cameraDy * cameraDy + cameraDz * cameraDz
+                            >= CAMERA_MOVE_REFRESH_SQR;
 
-            if (age < normalRefresh &&
-                    (!cameraMovedEnough || age < MOVING_REFRESH_TICKS)) {
+            if (!cameraMovedEnough && gameTime < cached.nextRefreshTick) {
+                return cached.visible;
+            }
+
+            // When moving into/out of cover, refresh quickly regardless of the longer static
+            // visible-cache interval so wall occlusion keeps the same practical behavior.
+            if (cameraMovedEnough && age < MOVING_REFRESH_TICKS) {
                 return cached.visible;
             }
         }
 
         boolean visible = isSuitVisible(level, stand, cameraPos);
-        occlusionCache.put(key, new OcclusionEntry(gameTime, cameraPos, visible));
+        long nextRefreshTick = gameTime + refreshDelay(key, visible);
+        occlusionCache.put(
+                key,
+                new OcclusionEntry(
+                        gameTime,
+                        cameraPos.x, cameraPos.y, cameraPos.z,
+                        visible,
+                        nextRefreshTick
+                )
+        );
 
         if (occlusionCache.size() > 2048) occlusionCache.clear();
         return visible;
@@ -286,6 +317,18 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         return true;
     }
 
+    private static long refreshDelay(long key, boolean visible) {
+        long mixed = key;
+        mixed ^= mixed >>> 33;
+        mixed *= 0xff51afd7ed558ccdL;
+        mixed ^= mixed >>> 33;
+        long nonNegative = mixed & Long.MAX_VALUE;
+
+        long base = visible ? VISIBLE_REFRESH_BASE_TICKS : OCCLUDED_REFRESH_BASE_TICKS;
+        long spread = visible ? VISIBLE_REFRESH_SPREAD_TICKS : OCCLUDED_REFRESH_SPREAD_TICKS;
+        return base + (nonNegative % spread);
+    }
+
     private static int effectiveRenderDistance() {
         return Math.min(
                 HeroStandClientConfig.renderDistance(),
@@ -305,5 +348,12 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         return effectiveRenderDistance();
     }
 
-    private record OcclusionEntry(long gameTime, Vec3 cameraPos, boolean visible) {}
+    private record OcclusionEntry(
+            long gameTime,
+            double cameraX,
+            double cameraY,
+            double cameraZ,
+            boolean visible,
+            long nextRefreshTick
+    ) {}
 }
