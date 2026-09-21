@@ -53,6 +53,28 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
     private long lastSweepTick = Long.MIN_VALUE;
 
     /**
+     * Fast path used every frame. It performs only the compact suit/light key lookup and never
+     * touches Palladium reflection/model inspection.
+     */
+    boolean renderCached(ArmorStand suitStand,
+                         int packedLight,
+                         long gameTime,
+                         PoseStack worldPose) {
+        sweep(gameTime);
+
+        CacheKey key =
+                new CacheKey(SuitIdentity.from(suitStand), packedLight);
+        Snapshot cached = snapshots.get(key);
+        if (cached == null) return false;
+
+        cached.lastUsedTick = gameTime;
+        cached.draw(worldPose);
+        return true;
+    }
+
+    /**
+     * Called only after the bridge has decided an uncached suit is snapshot-safe.
+     *
      * @return true when a cached/new snapshot was drawn; false means caller should live-render.
      */
     boolean renderOrBuild(ArmorStand suitStand,
