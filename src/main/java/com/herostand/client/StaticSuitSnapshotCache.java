@@ -111,7 +111,7 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             return BuildResult.DEFERRED;
         }
 
-        Snapshot built = build(renderer, gameTime);
+        Snapshot built = build(suitStand, renderer, gameTime);
         if (built == null) {
             rememberUncacheable(suit, gameTime);
             return BuildResult.REJECTED;
@@ -168,27 +168,55 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
         clear();
     }
 
-    private Snapshot build(SnapshotRenderer renderer, long gameTime) {
-        CaptureSource capture = new CaptureSource(renderTypeResolver);
-        PoseStack localPose = new PoseStack();
+    private Snapshot build(ArmorStand suitStand,
+                           SnapshotRenderer renderer,
+                           long gameTime) {
+        CaptureSource first = new CaptureSource(renderTypeResolver);
+        CaptureSource second = null;
+        int originalTick = suitStand.tickCount;
 
         try {
-            renderer.render(localPose, capture);
+            /*
+             * Render the real Palladium SuitStand twice at different animation times. This replaces
+             * the old "unknown Java class = unsafe" rule with evidence from the actual emitted
+             * geometry, textures and vertex colors.
+             */
+            renderer.render(new PoseStack(), first, 0.0F);
 
-            if (!capture.snapshotSafe()) {
-                capture.discard();
+            if (!first.snapshotSafe()) {
+                first.discard();
                 return null;
             }
 
-            List<MeshPart> parts = capture.upload();
+            long firstSignature = first.signature();
+
+            second = new CaptureSource(renderTypeResolver);
+            suitStand.tickCount = originalTick + 7;
+            renderer.render(new PoseStack(), second, 0.5F);
+
+            if (!second.snapshotSafe()
+                    || firstSignature != second.signature()) {
+                first.discard();
+                second.discard();
+                return null;
+            }
+
+            second.discard();
+            second = null;
+            suitStand.tickCount = originalTick;
+
+            List<MeshPart> parts = first.upload();
             if (parts.isEmpty()) {
                 return null;
             }
 
             return new Snapshot(parts, gameTime);
         } catch (Throwable failure) {
-            capture.discard();
+            first.discard();
+            if (second != null) second.discard();
             return null;
+        } finally {
+            suitStand.tickCount = originalTick;
         }
     }
 
@@ -290,7 +318,9 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
     @FunctionalInterface
     interface SnapshotRenderer {
-        void render(PoseStack localPose, MultiBufferSource captureSource);
+        void render(PoseStack localPose,
+                    MultiBufferSource captureSource,
+                    float samplePartialTick);
     }
 
     private static final class CaptureSource implements MultiBufferSource {
@@ -346,6 +376,30 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             }
 
             return true;
+        }
+
+        long signature() {
+            long hash = 0xcbf29ce484222325L;
+            hash = mix(hash, buckets.size());
+
+            for (Bucket bucket : buckets.values()) {
+                RenderType type = bucket.drawType != null
+                        ? bucket.drawType
+                        : bucket.originalType;
+
+                hash = mix(hash, type.toString().hashCode());
+                hash = mix(hash, bucket.vertexCount);
+                hash = mix(hash, bucket.contentHash);
+                hash = mix(hash, bucket.partialVertexAlpha ? 1 : 0);
+            }
+
+            return hash;
+        }
+
+        private static long mix(long hash, long value) {
+            hash ^= value;
+            hash *= 0x100000001b3L;
+            return hash;
         }
 
         List<MeshPart> upload() {
@@ -410,6 +464,8 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
             RenderType drawType;
             boolean partialVertexAlpha;
+            int vertexCount;
+            long contentHash = 0xcbf29ce484222325L;
 
             Bucket(RenderType originalType, BufferBuilder builder) {
                 this.originalType = originalType;
@@ -422,6 +478,21 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
                 if (alpha > 0 && alpha < 255) {
                     partialVertexAlpha = true;
                 }
+            }
+
+            void hash(int discriminator, long value) {
+                contentHash ^= discriminator;
+                contentHash *= 0x100000001b3L;
+                contentHash ^= value;
+                contentHash *= 0x100000001b3L;
+            }
+
+            void hashFloat(int discriminator, float value) {
+                hash(discriminator, Integer.toUnsignedLong(Float.floatToIntBits(value)));
+            }
+
+            void hashDouble(int discriminator, double value) {
+                hash(discriminator, Double.doubleToLongBits(value));
             }
         }
 
@@ -437,6 +508,9 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
             @Override
             public VertexConsumer vertex(double x, double y, double z) {
+                bucket.hashDouble(1, x);
+                bucket.hashDouble(2, y);
+                bucket.hashDouble(3, z);
                 delegate.vertex(x, y, z);
                 return this;
             }
@@ -445,36 +519,51 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             public VertexConsumer color(
                     int red, int green, int blue, int alpha) {
                 bucket.observeAlpha(alpha);
+                bucket.hash(4, red);
+                bucket.hash(5, green);
+                bucket.hash(6, blue);
+                bucket.hash(7, alpha);
                 delegate.color(red, green, blue, alpha);
                 return this;
             }
 
             @Override
             public VertexConsumer uv(float u, float v) {
+                bucket.hashFloat(8, u);
+                bucket.hashFloat(9, v);
                 delegate.uv(u, v);
                 return this;
             }
 
             @Override
             public VertexConsumer overlayCoords(int u, int v) {
+                bucket.hash(10, u);
+                bucket.hash(11, v);
                 delegate.overlayCoords(u, v);
                 return this;
             }
 
             @Override
             public VertexConsumer uv2(int u, int v) {
+                bucket.hash(12, u);
+                bucket.hash(13, v);
                 delegate.uv2(u, v);
                 return this;
             }
 
             @Override
             public VertexConsumer normal(float x, float y, float z) {
+                bucket.hashFloat(14, x);
+                bucket.hashFloat(15, y);
+                bucket.hashFloat(16, z);
                 delegate.normal(x, y, z);
                 return this;
             }
 
             @Override
             public void endVertex() {
+                bucket.vertexCount++;
+                bucket.hash(17, bucket.vertexCount);
                 delegate.endVertex();
             }
 
@@ -482,11 +571,16 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             public void defaultColor(
                     int red, int green, int blue, int alpha) {
                 bucket.observeAlpha(alpha);
+                bucket.hash(18, red);
+                bucket.hash(19, green);
+                bucket.hash(20, blue);
+                bucket.hash(21, alpha);
                 delegate.defaultColor(red, green, blue, alpha);
             }
 
             @Override
             public void unsetDefaultColor() {
+                bucket.hash(22, 1L);
                 delegate.unsetDefaultColor();
             }
         }
