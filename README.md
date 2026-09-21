@@ -8,7 +8,7 @@ Repository: `PunctualBoat203/HeroStand`
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.6**
+Current test build: **0.2.7**
 
 ## IMPORTANT — current development line
 
@@ -542,4 +542,43 @@ Validation priorities:
 4. verify `snap` rises materially above the previous 0–1.9%;
 5. check transparent/glass suit layers while moving sideways so camera-dependent ordering can be observed;
 6. compare FPS, GPU%, and allocation only after snapshots have warmed.
+
+
+
+## 0.2.6 field result and 0.2.7 direction
+
+PunctualBoat's 0.2.6 wall test showed roughly **53 FPS**, about **82% GPU**, and about **488 MiB/s allocation**. The HeroStand F3 line reported approximately:
+
+`HeroStand 0.2.6 armor=1.8% hit=2772 build=1 layers=154006 unsafe=0 cap=104 cache=1 why=empty`
+
+Interpretation:
+- the split renderer was stable enough to run
+- only one useful base-armor snapshot existed
+- most suit cost is in Palladium pack/render layers rather than HumanoidArmorLayer
+- continuing to optimize only base armor is not useful for the mixed superhero wall
+
+0.2.7 therefore moves the cache to Palladium's pack-layer geometry, using Palladium's own `IPackRenderLayer.createSnapshot(...)` hook as the static-layer eligibility signal.
+
+0.2.7 implementation:
+- **no custom OpenGL state**
+- **no custom VBO replay**
+- **no index-only translucent resort/upload**
+- known snapshot-capable pack layers are rendered into primitive CPU vertex arrays once
+- the same layer is sampled twice at different animation times; changing output stays live
+- cached vertices are replayed into Minecraft's normal `MultiBufferSource`
+- Minecraft/Palladium continue to own RenderTypes, glint, transparency sorting, batching and final GPU drawing
+- unsupported/dynamic/empty layers stay live
+- cache is bounded to roughly **96 MiB**, max **256 entries**, and idle entries expire after **120 seconds**
+- cache and eligibility state clear on the existing renderer/session/resource lifecycle
+- author/owner remains **PunctualBoat**
+
+0.2.7 F3 diagnostics use:
+`HeroStand 0.2.7 pack=... hit=... build=... live=... dyn=... defer=... empty=... cache=... MiB why=...`
+
+The important validation signals are:
+- `build` and `cache` should rise above zero
+- `hit` should climb rapidly after warmup
+- `pack %` should become materially higher than the 0.2.6 base-armor 1.8%
+- allocation rate should be compared against the 0.2.6 ~488 MiB/s result
+- no black/top-screen artifacting, crash, Mark One regression, wall-culling regression, or distance-culling regression
 
