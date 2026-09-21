@@ -70,6 +70,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     private final PalladiumRenderBridge palladium = new PalladiumRenderBridge();
     private final PalladiumSuitStandBridge palladiumSuitStand = new PalladiumSuitStandBridge();
     private final GpuRenderRouter gpuRouter = new GpuRenderRouter();
+    private StaticArmorVboCache staticArmorCache;
 
     private final Map<Long, OcclusionEntry> occlusionCache = new HashMap<>();
     private Level occlusionLevel;
@@ -135,11 +136,13 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                     if (!gpuRouter.isHealthy(backend)) continue;
 
                     try {
+                        if (!gpuRouter.isSupported(backend)) continue;
+
                         boolean success = switch (backend) {
-                            case NVIDIA_FAST -> renderNvidiaFastPath(
+                            case MODERN_STATIC -> renderModernStaticPath(
                                     palladiumContext, partialTick, poseStack, buffers, packedLight
                             );
-                            case AMD_BALANCED -> renderAmdBalancedPath(
+                            case BALANCED_STREAM -> renderBalancedStreamPath(
                                     palladiumContext, partialTick, poseStack, buffers, packedLight
                             );
                             case GENERIC_NATIVE -> renderNativePalladiumPath(
@@ -173,31 +176,32 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     }
 
     /**
-     * Aggressive path preferred on NVIDIA hardware. It keeps the direct base-armor path and the
-     * static Palladium layer accelerator from 0.1.13, but now feeds them a real client-only
-     * Palladium SuitStand entity rather than a plain ArmorStand.
+     * Modern RTX 30+/RX 6000+ path. The base armor model is emitted only when the cache entry is
+     * built, then kept resident in STATIC OpenGL vertex buffers. Palladium pack layers remain on
+     * the normal live path so animated/custom effects are not frozen.
      */
-    private boolean renderNvidiaFastPath(ArmorStand renderContext, float partialTick,
-                                         PoseStack poseStack, MultiBufferSource buffers,
-                                         int packedLight) {
+    private boolean renderModernStaticPath(ArmorStand renderContext, float partialTick,
+                                           PoseStack poseStack, MultiBufferSource buffers,
+                                           int packedLight) {
+        StaticArmorVboCache cache = ensureStaticArmorCache();
+
+        if (!cache.renderOrBuild(
+                this,
+                palladium,
+                renderContext,
+                poseStack,
+                packedLight,
+                partialTick
+        )) {
+            // A cache miss may intentionally decline this frame when the upload budget is full.
+            // Returning false lets BALANCED_STREAM draw the stand normally without treating that
+            // as a renderer failure.
+            return false;
+        }
+
         poseStack.pushPose();
         try {
             applyManualPalladiumTransform(poseStack);
-
-            boolean directArmor = palladium.renderArmorDirect(
-                    renderContext,
-                    parentModel,
-                    innerArmorModel,
-                    outerArmorModel,
-                    poseStack,
-                    buffers,
-                    packedLight,
-                    partialTick
-            );
-
-            // Direct rendering is deliberately preflighted by PalladiumRenderBridge. If a model
-            // needs a path we cannot reproduce safely, try the next backend before drawing it.
-            if (!directArmor) return false;
 
             if (!palladium.renderPackLayers(
                     renderContext,
@@ -206,9 +210,9 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                     buffers,
                     packedLight,
                     partialTick,
-                    true
+                    false
             )) {
-                throw new IllegalStateException("Accelerated Palladium pack-layer path failed");
+                throw new IllegalStateException("Live Palladium pack-layer path failed");
             }
 
             return true;
@@ -218,13 +222,12 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     }
 
     /**
-     * Compatibility/performance balance preferred on AMD. It avoids HeroStand's direct armor
-     * renderer and static-layer substitution, while still skipping the full entity renderer.
-     * Palladium's own HumanoidArmorLayer hooks and pack layers do the visual work.
+     * Streaming compatibility/performance balance. This uses Palladium's normal armor hooks and
+     * normal live pack-layer rendering without GPU mesh caching.
      */
-    private boolean renderAmdBalancedPath(ArmorStand renderContext, float partialTick,
-                                          PoseStack poseStack, MultiBufferSource buffers,
-                                          int packedLight) {
+    private boolean renderBalancedStreamPath(ArmorStand renderContext, float partialTick,
+                                             PoseStack poseStack, MultiBufferSource buffers,
+                                             int packedLight) {
         poseStack.pushPose();
         try {
             applyManualPalladiumTransform(poseStack);
@@ -272,7 +275,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         return true;
     }
 
-    private static void applyManualPalladiumTransform(PoseStack poseStack) {
+    static void applyManualPalladiumTransform(PoseStack poseStack) {
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0F));
         poseStack.scale(PALLADIUM_SUIT_SCALE, PALLADIUM_SUIT_SCALE, PALLADIUM_SUIT_SCALE);
         poseStack.translate(0.0D, PALLADIUM_SUIT_Y_OFFSET, 0.0D);
@@ -292,6 +295,28 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                 buffers,
                 packedLight
         );
+    }
+
+    HumanoidModel<ArmorStand> parentModelForCache() {
+        return parentModel;
+    }
+
+    ArmorStandArmorModel innerArmorModelForCache() {
+        return innerArmorModel;
+    }
+
+    ArmorStandArmorModel outerArmorModelForCache() {
+        return outerArmorModel;
+    }
+
+    private StaticArmorVboCache ensureStaticArmorCache() {
+        if (staticArmorCache == null) {
+            staticArmorCache = new StaticArmorVboCache(
+                    gpuRouter.modernMeshLimit(),
+                    gpuRouter.modernBuildsPerTick()
+            );
+        }
+        return staticArmorCache;
     }
 
     private ArmorStand preparePalladiumRenderContext(HeroStandBlockEntity stand, Level level) {
@@ -419,6 +444,11 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         if (level != occlusionLevel) {
             occlusionLevel = level;
             occlusionCache.clear();
+
+            if (staticArmorCache != null) {
+                staticArmorCache.clear();
+            }
+
             palladiumSuitStand.reset();
             preparedPalladiumContext = null;
         }
