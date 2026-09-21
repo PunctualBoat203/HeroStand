@@ -346,7 +346,7 @@ public final class HeroStandRenderer
 
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.7 pack=%.1f%% hit=%d build=%d live=%d dyn=%d defer=%d empty=%d cache=%d %.1fMiB why=%s",
+                "HeroStand 0.2.8 pack=%.1f%% hit=%d build=%d live=%d dyn=%d defer=%d empty=%d cache=%d %.1fMiB why=%s",
                 packPercent,
                 statPackHits,
                 statPackBuilds,
