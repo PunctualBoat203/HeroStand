@@ -1,0 +1,13 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.herostand.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "herostand.refmap.json",
+  "client": [
+    "PalladiumConditionMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
