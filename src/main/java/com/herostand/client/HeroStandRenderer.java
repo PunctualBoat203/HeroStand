@@ -150,7 +150,7 @@ public final class HeroStandRenderer
                                             packedLight,
                                             gameTime,
                                             poseStack,
-                                            (localPose, captureSource) ->
+                                            (localPose, captureSource, samplePartialTick) ->
                                                     minecraft
                                                             .getEntityRenderDispatcher()
                                                             .render(
@@ -159,7 +159,7 @@ public final class HeroStandRenderer
                                                                     0.0D,
                                                                     0.0D,
                                                                     0.0F,
-                                                                    0.0F,
+                                                                    samplePartialTick,
                                                                     localPose,
                                                                     captureSource,
                                                                     packedLight
@@ -343,15 +343,13 @@ public final class HeroStandRenderer
 
         return String.format(
                 java.util.Locale.ROOT,
-                "HeroStand 0.2.1: snap %.1f%% (%d hit/%d built) live=%d blocked=%d safetyReject=%d captureReject=%d defer=%d cache=%d",
+                "HeroStand 0.2.2 snap=%.1f%% hit=%d build=%d live=%d dyn=%d cap=%d cache=%d",
                 hitPercent,
                 statSnapshotHits,
                 statSnapshotBuildDraws,
                 statLivePalladium,
-                statBlockedDynamic,
                 statSafetyRejects,
                 statCaptureRejects,
-                statBuildDeferred,
                 entries
         );
     }
