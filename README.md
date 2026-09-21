@@ -2,593 +2,253 @@
 
 ## Project
 
-HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero/modded armor displays, especially Palladium suits.
+HeroStand is a standalone **Minecraft Forge 1.20.1** mod for efficient superhero/modded armor displays, especially Palladium/Satsu Iron Man suits.
 
 Repository: `PunctualBoat203/HeroStand`  
 Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.2.7**
+Current test build: **0.2.9**
 
-## IMPORTANT — current development line
+## Active development line
 
-Active renderer rebuild branch:
+Current branch:
 
-`rebuild/0.2.6-split-armor-layers`
+`rebuild/0.2.9-render-plan-cache`
 
-0.2.5 translucent-index experiment branch:
+0.2.9 was rebuilt from the **stable 0.2.6 visual path**, not from the artifacting 0.2.8 experiment.
 
-`rebuild/0.2.5-translucent-index-cache`
+Do not call a stale `main` code build the newest renderer unless this branch has been merged. The handoff on `main` is intentionally kept current even when implementation work remains on a test branch.
 
-0.2.4 direct-capture diagnostics branch:
+## What PunctualBoat has validated / wants preserved
 
-`rebuild/0.2.4-direct-capture-diag`
-
-0.2.3 single-capture branch:
-
-`rebuild/0.2.3-single-capture`
-
-0.2.2 stability experiment branch:
-
-`rebuild/0.2.2-stable-snapshot`
-
-0.2.1 diagnostics branch:
-
-`rebuild/0.2.1-cache-diagnostics`
-
-0.2.0 renderer reset branch:
-
-`rebuild/0.2.0-native-snapshot`
-
-0.2.0 is a **ground-up rendering/visual rebuild**. It is intentionally not another layer on top of the 0.1.10–0.1.19 renderer experiments.
-
-The rebuild starts conceptually from the **0.1.8/0.1.9 behavior the user liked**, while replacing the Palladium visual renderer itself.
-
-Known reference points:
-- **0.1.8** user-provided JAR: original newer rendering reference.
-- **0.1.9**: known baseline with configurable client/server render distance and working cached wall occlusion.
-- **0.1.17**: Mark One visual issue confirmed fixed, but mixed-suit FPS still poor.
-- **0.1.18**: roughly 49 FPS / 63% GPU / 476 MiB/s allocation in the mixed-suit wall.
-- **0.1.19**: no meaningful improvement and may have been worse.
-- **0.2.0**: clean renderer reset; user test was a very stable **49–50 FPS**, about **79% GPU**, and about **511 MiB/s allocation** at the mixed-suit wall.
-- **0.2.1**: cache-hot-path correction + F3 diagnostics. User test proved the snapshot cache was being used **0.0%** of the time.
-- **0.2.2**: unknown-layer rejection was removed, but the user's F3 test still showed **0.0% snapshot usage**, **cache=0**, **cap=106**, about **48 FPS / 83% GPU**, and it introduced visible sky flicker. The two-pass capture/sorting-rejection design is therefore abandoned.
-- **0.2.3**: finally produced a snapshot, but only **1 cached entry / ~1.9% snapshot usage** in the wall test. User still saw roughly **46–48 FPS**, **~81% GPU**, and a new top-of-screen flicker/artifact. F3 showed **cap=133 / cache=1**, so nearly every candidate still failed capture.
-- **0.2.4**: direct renderer capture + rejection diagnostics. User test still showed **0.0% snapshot usage / cache=0 / cap=101**, with `why=sorted:RenderType[palladium:arm...]`. Performance remained about **51 FPS / 79% GPU / ~521 MiB/s allocation**. The black/flickering top-of-screen artifact also remained even with zero cached snapshots, strongly implicating the runtime OpenGL texture-readback experiment rather than snapshot replay.
-- **0.2.5**: **crashed on world load/render**. PunctualBoat supplied the crash report. The failure is directly in `StaticSuitSnapshotCache$MeshPart.resort()` while `VertexBuffer.upload()` consumes HeroStand's index-only re-sort buffer (`MemoryUtil.memSlice` -> `BufferBuilder.RenderedBuffer` -> `VertexBuffer`). The user also saw immediate black/top-screen artifacting before the crash. **Do not reuse the 0.2.5 translucent index-resort implementation.**
-- **0.2.6**: stability-first split renderer. Cache only Palladium's native `HumanoidArmorLayer` / base armor pass. Keep Palladium's `PackRenderLayerRenderer` live every frame for sorted translucent add-on layers, glow, thrusters, lightning, and third-party pack-layer behavior. Removes the broken index-only re-sort path and keeps runtime OpenGL texture readback removed.
-
-Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
-
-## What must remain
-
-These are validated user preferences / working behaviors and should be preserved unless PunctualBoat explicitly asks otherwise:
-
-- HeroStand remains a **block + non-ticking block entity**, not a persistent world ArmorStand/LivingEntity.
+- HeroStand remains a **block + non-ticking block entity**.
 - Four equipment slots: head, chest, legs, feet.
-- The mannequin/body is **invisible by default**.
-- The visible base remains a simple clean light/white iron-like pedestal.
-- Block facing controls suit facing exactly once; do not reintroduce interpolation/yaw fighting.
-- No vibration/jitter.
-- Distance de-render works and is configurable.
-- Server can cap the client's suit render distance.
-- Solid-wall occlusion works and FPS recovers when stands are hidden.
-- Partial visibility around wall/block edges should not incorrectly hide a suit.
-- Palladium remains optional; HeroStand must still load without it.
-- Mark One/custom suit proportions must remain correct.
-- Breaking the stand returns its equipment once.
-- `/kill @e` and entity purge logic must not target HeroStand itself.
+- Invisible mannequin.
+- Clean light/white pedestal.
+- Correct facing with no double-yaw/jitter.
+- Mark One/custom suit proportions must stay correct.
+- Client render-distance option plus server cap.
+- Solid-wall occlusion and distance de-render must keep working.
+- Partial visibility around block edges must not wrongly hide suits.
+- Palladium remains optional at runtime.
 - Author / owner attribution is **PunctualBoat**.
+- Prefer measured changes over speculative renderer rewrites.
 
-## Why the 0.1.x optimization stack was abandoned
+## Reference visual baseline
 
-The user stress-tested a large mixed wall of Palladium suits.
+The user-provided **0.1.8** JAR remains the original known-good visual reference.
 
-Observed 0.1.x results included:
-- roughly 40–55 FPS with many visible mixed suits;
-- GPU load frequently 60–90%;
-- allocation around 470–500 MiB/s;
-- several Java-side caching/VBO/batching experiments produced little or no real FPS gain.
+**0.1.9** added configurable client/server distance limits while preserving the preferred rendering behavior.
 
-The important conclusion is that HeroStand should stop trying to manually reimplement more and more of Palladium's renderer while still drawing every suit as a dynamic entity every frame.
+Later 0.1.x/0.2.x work focused on the mixed-suit performance wall.
 
-0.2.0 therefore resets the visual architecture.
+## Mixed-wall problem
 
-## 0.2.0 ground-up renderer
+PunctualBoat's repeatable stress scene is a large wall of mixed Satsu/Palladium superhero suits.
 
-### Core rule: Palladium owns Palladium visuals
+Observed behavior across many builds:
+- usually about **45–55 FPS** while looking directly at the wall;
+- GPU often roughly **60–90%**;
+- allocation frequently around **450–520 MiB/s**;
+- FPS recovers when distance or wall occlusion removes the stands.
 
-HeroStand no longer manually recreates Palladium's suit transforms/models/layer math for the normal Palladium path.
+This means culling works; the remaining problem is the cost of visible suit rendering.
 
-When Palladium armor is present, HeroStand creates a **real client-only Palladium SuitStand object** reflectively and lets Palladium's actual `SuitStandRenderer` produce the visual.
+## Important measured results
 
-The temporary SuitStand:
-- is never added to the world entity list;
-- never ticks as a world entity;
-- has no AI/gameplay role;
-- exists only as a client render context;
-- is invisible so the HeroStand block/pedestal remains the visible base.
+- **0.2.0:** stable ~49–50 FPS but no meaningful speedup.
+- **0.2.1:** diagnostics proved whole-suit snapshot use was **0.0%**.
+- **0.2.2:** `snap=0`, `cache=0`, `cap=106`; two-pass probing introduced screen/sky artifacting.
+- **0.2.3:** only one useful snapshot / about **1.9%** coverage; artifacting remained.
+- **0.2.4:** `snap=0`, `cache=0`, sorted Palladium RenderType blocker; runtime GL texture-readback experiment caused black/top-screen artifacting.
+- **0.2.5:** crashed in HeroStand's translucent index-resort path (`StaticSuitSnapshotCache$MeshPart.resort -> VertexBuffer.upload -> MemoryUtil.memSlice`). Do not reuse it.
+- **0.2.6:** stable split renderer. Base-armor cache only reached about **1.8%** while pack-layer calls exceeded **154,000**. This proved base armor is not the main cost.
+- **0.2.7:** `pack=0.0%`, `build=0`, `cache=0`, `why=unsupported`; using Palladium `createSnapshot()` as general eligibility was wrong.
+- **0.2.8:** `pack=0.0%`, `build=0`, `cache=0`, `why=empty`; artifacting returned. Later source inspection proved Gecko layers bypassed HeroStand's capture buffer and wrote to Minecraft's global world buffer during the extra probe renders.
 
-This is the visual-correctness baseline for custom suits such as Mark One.
+## DO NOT LOOP BACK TO THESE APPROACHES
 
-### Complete static suit snapshots
+These have already been tested and are ruled out unless new evidence specifically justifies revisiting them:
 
-For suits that are safe to treat as static, HeroStand captures the **complete native Palladium SuitStand visual** into GPU-resident static buffers.
+1. Whole SuitStand snapshots.
+2. Any extra/probing Palladium or Gecko render calls during the world render pass.
+3. Two-time-sample visual rendering to decide whether something is static.
+4. Runtime OpenGL texture readback / `glGetTexImage`.
+5. Custom whole-suit VBO replay.
+6. HeroStand-managed translucent index re-sorting/upload.
+7. Base-armor-only caching as the primary optimization.
+8. Treating Palladium `createSnapshot()` as a general static-layer eligibility API.
+9. CPU “capture” that assumes every Palladium/Gecko layer uses the supplied `MultiBufferSource`.
 
-This is different from the failed 0.1.15/0.1.16 VBO experiment:
-- the old experiment cached only part of the suit while Palladium pack layers still rendered live;
-- 0.2.0 captures the **whole known-static native visual**, including base armor and known-static pack layers.
+## Exact Satsu Iron Man 3.5.3 deep dive
 
-A cached snapshot is keyed by:
-- all four equipped armor item identities;
-- armor damage/NBT state;
-- packed light.
+The exact Satsu 3.5.3 artifact used by the test instance was inspected directly.
 
-Repeated stands wearing the exact same suit under the same packed-light value reuse the same snapshot.
+Important findings:
 
-Facing is applied outside the snapshot, so north/east/south/west stands do not require duplicate mesh caches.
+- Satsu 3.5.3 ships **no Java classes of its own**.
+- Its rendering complexity is supplied through **Palladium resource/data definitions plus GeckoLib compatibility**.
+- It contains **457 Palladium render-layer JSON files**.
+- **447** of those top-level resources are compound layers.
+- Recursive expansion produced about **1,815 leaf render layers**, including roughly **1,782 GeckoLib layers**.
+- Many advanced suits expand into **60–80 Gecko sublayers**.
+- Large numbers of those layers use dynamic alpha masks, glow passes, ability/integer-property conditions, animation metadata, or separate geometry pieces.
+- Satsu explicitly targets display entities: its `satsu_iron_man_addon:stands` entity tag contains both `minecraft:armor_stand` and `palladium:suit_stand`.
 
-### What is NOT frozen
+This means HeroStand's temporary Palladium SuitStand intentionally enters Satsu's stand-specific visual path. The expensive wall is not merely “base Palladium armor”; it is a very large Satsu-defined Palladium/Gecko render graph.
 
-HeroStand refuses to snapshot visuals that are not proven safe.
+## Gecko/Palladium root cause discovered after 0.2.8
 
-These stay on Palladium's live native renderer:
-- known thruster layers;
-- known lightning-spark layers;
-- ExtraAnimatedModel armor/layer models;
-- any capture path that performs unsupported/non-buffered behavior;
-- any snapshot build that fails.
+Palladium's Gecko compatibility is materially different from ordinary pack layers.
 
-0.2.5 translucent snapshot correction was **reverted after a confirmed HeroStand crash**. Do not regenerate/re-upload index-only translucent buffers through the old `VertexBuffer.upload()` path.
+`GeckoRenderLayerModel.renderToBuffer()` obtains:
 
-### 0.2.6 split armor/layer architecture
+`Minecraft.getInstance().levelRenderer.renderBuffers.bufferSource()`
 
-0.2.6 no longer treats a Palladium suit as one snapshot unit.
+directly.
 
-- Resolve the real Palladium `SuitStandRenderer` and its injected render-layer list.
-- Cache only the real `HumanoidArmorLayer`, preserving Palladium's armor mixin/custom model selection.
-- Render the real `PackRenderLayerRenderer` live after the cached base armor.
-- The base armor cache never performs runtime GL texture readback.
-- The base armor cache never performs per-frame translucent index re-sorting.
-- Known `ExtraAnimatedModel` base armor remains live instead of being frozen.
-- Render-layer lookup finds the `LivingEntityRenderer` layer list by **field type**, not the development field name, so SRG production mappings do not break it.
-- RenderType sort policy no longer reflects the private `sortOnUpload` field. Palladium's own base armor RenderType is known from source to be created with `sortOnUpload=false`.
-- Palladium's default pack-layer `minecraft:solid` intentionally uses `RenderType.entityTranslucent(...)`; those pack layers therefore stay live in 0.2.6 instead of blocking the base armor cache.
+It does **not** reliably remain inside a custom `MultiBufferSource` supplied by HeroStand.
 
-This is a deliberate partial-cache design: prioritize visual correctness and stability, then measure how much of the wall cost is in base armor versus pack layers before optimizing the live layer half.
+This explains previous confusing results:
+- capture buffers often appeared empty;
+- “CPU-only” probe renders were not actually CPU-only;
+- extra Gecko probes emitted real geometry into the active world buffer;
+- duplicate/global-buffer writes caused the top-screen artifacting.
 
-Important correction: **unknown/custom render-layer classes are no longer rejected merely because HeroStand does not recognize their Java class name.** Palladium explicitly supports third-party render-layer parsers. Unknown/add-on layers may attempt native capture; known animated behavior remains live.
+Therefore HeroStand 0.2.9 performs **exactly one visual render per Palladium/Satsu layer** and does not capture/probe Gecko geometry.
 
-This is intentional. Visual correctness wins over cache coverage.
+## Simple hot-path problem found in Palladium
 
-### Alpha / translucent handling
+Two pieces of repeated bookkeeping are safe to optimize without changing visuals.
 
-Palladium commonly uses sorted translucent RenderTypes for base armor, including runtime/generated textures.
+### 1. Layer discovery
 
-0.2.4 attempted to inspect runtime OpenGL texture pixels with `glGetTexImage`. The user still had **cache=0**, while the screen developed a black/flickering top artifact. That GL readback path is removed completely in 0.2.5.
+`PackRenderLayerManager.forEachLayer()` rebuilds the layer traversal every render:
+- runs all registered providers;
+- checks ability-provided layers;
+- walks every equipment slot;
+- creates armor `DataContext` objects;
+- checks addon-item render-layer containers;
+- looks up `ArmorRendererData`;
+- walks each renderer's pack layers.
 
-0.2.5 follows Minecraft's own translucent chunk strategy instead:
-- ordinary resource-pack textures may still be classified as binary-alpha and converted to cutout/no-cull when safely provable;
-- runtime/generated Palladium textures are **not** rebound/read from OpenGL;
-- if a captured RenderType still requests sorting, HeroStand keeps the original translucent RenderType;
-- the captured vertex geometry is uploaded once;
-- the original `BufferBuilder.SortState` / quad centers are retained;
-- before drawing a cached stand, HeroStand computes the camera position in that stand's local coordinates;
-- only the translucent **index order** is regenerated with `VertexSorting.byDistance(...)`;
-- the resulting index-only buffer is uploaded to the existing VBO; vertex data/model geometry is not rebuilt.
+A HeroStand's four ItemStacks are static until the player changes the stand, so rediscovering the same layer graph every frame is wasted work.
 
-This is specifically intended to avoid both previous failure modes:
-1. rejecting every Palladium armor snapshot just because its RenderType is sorted; and
-2. freezing one stale translucent sort order, which produced visible artifacts.
+### 2. Condition DataContext allocation
 
-### Snapshot lifecycle / VRAM limits
+Palladium 4.5.9 `IPackRenderLayer.conditionsFulfilled()` creates a fresh:
 
-The snapshot cache is bounded:
-- maximum **192** complete suit/light snapshots;
-- maximum **4 lighting variants per unique suit**;
-- maximum **1 new snapshot build per game tick** so a showroom warms progressively without large capture spikes;
-- unused snapshots are retired after **120 seconds**;
-- sweep runs every **5 seconds**, including while stands are offscreen;
-- world changes clear snapshots;
-- logout clears snapshots;
-- resource reload clears snapshots;
-- every eviction explicitly closes the OpenGL `VertexBuffer`.
+`DataContext.forEntity(livingEntity)`
 
-The hot path for an already-cached suit is only:
-1. compute compact suit/light identity;
-2. find snapshot;
-3. replay GPU buffers.
-
-It does not redo Palladium renderer/model safety inspection on every cache hit.
-
-## 0.2.1 cache-hot-path correction and diagnostics
-
-The 0.2.0 user test was visually stable but did not materially improve throughput:
-- **49–50 FPS**
-- approximately **79% GPU**
-- approximately **511 MiB/s allocation**
-- FPS was notably stable, but still far below the target when looking directly at the mixed-suit wall.
+for **each individual condition**.
 
-That result strongly suggests most visible suits were still reaching Palladium's live renderer instead of the complete static snapshot path.
+`DataContext` owns a new `HashMap`, so a Satsu suit with dozens of nested layers and many ability/property conditions can create a large amount of short-lived garbage every frame.
 
-Two concrete 0.2.0 inefficiencies were found:
+This is a strong candidate for the observed ~450–500 MiB/s allocation rate.
 
-1. **Snapshot lookup happened too late.**  
-   HeroStand first identified the Palladium suit, updated the reusable SuitStand equipment, and performed renderer/context work before checking for an already-built snapshot.
+## HeroStand 0.2.9 design
 
-2. **Known-unsnapshotable suits were safety-inspected every frame.**  
-   The cache already remembered capture failures for 30 seconds, but a suit rejected by the higher-level dynamic-model/layer safety check was never added to that cooldown. Dynamic/unsafe suits therefore repeated reflective model/layer inspection every visible frame.
+0.2.9 is intentionally a **bookkeeping optimization, not a rendering rewrite**.
 
-0.2.1 changes:
-- Compute the compact suit/light snapshot key directly from the HeroStand block entity's four stored ItemStacks.
-- Try the snapshot cache **before Palladium detection, reflection, SuitStand preparation, or equipment copying**.
-- A cache hit now goes directly from HeroStand state -> snapshot lookup -> GPU draw.
-- If a suit fails the Palladium snapshot-safety check, remember that suit identity as uncacheable for 30 seconds instead of reflectively re-checking it every frame.
-- Keep native Palladium live rendering as the correctness fallback.
+### Cached Palladium render plan
 
-### F3 diagnostic line
+For each HeroStand, HeroStand caches the exact discovered:
 
-0.2.1 adds a HeroStand line to the normal F3 debug screen.
+`(DataContext, IPackRenderLayer)`
 
-It reports cumulative renderer behavior for the current renderer session:
-- snapshot percentage;
-- snapshot cache hits;
-- snapshots built and drawn;
-- Palladium live renders;
-- blocked/known-dynamic renders;
-- safety rejects;
-- capture rejects;
-- build-budget deferrals;
-- current snapshot cache entry count.
+plan.
 
-Example shape:
+The plan is rebuilt only when:
+- the stand's armor changes;
+- the block entity reloads/syncs;
+- the client level changes;
+- resources/caches are explicitly cleared.
 
-`HeroStand 0.2.1: snap 85.0% (... hit/... built) live=... blocked=... safetyReject=... captureReject=... defer=... cache=...`
+Every actual layer still renders through Palladium/Gecko exactly once.
 
-This line is intentionally diagnostic. The next mixed-wall screenshot should include it.
+### Reused condition context
 
-How to interpret it:
-- **High snapshot % (ideally most static suits)** but FPS remains ~50: the problem is snapshot replay/draw submission/GPU cost, not Palladium model construction.
-- **Low snapshot % + high safetyReject/blocked**: the static/dynamic classifier is too conservative for the user's suit pack.
-- **Low snapshot % + high captureReject**: RenderTypes/translucency are preventing snapshots.
-- **Low snapshot % + high live but low rejects**: suit classification/context routing is missing expected Palladium suits.
-- **High defer during initial warmup only** is normal because builds are intentionally throttled.
-- Allocation should drop materially once snapshot hits dominate; if it does not, inspect work performed outside the suit renderer.
+0.2.9 includes an **optional Palladium client mixin**.
 
-## 0.2.1 measured result — definitive cache miss diagnosis
+During HeroStand's pack-layer pass, one entity-only Palladium `DataContext` is reused for repeated `conditionsFulfilled()` checks instead of constructing a new `DataContext + HashMap` for every condition.
 
-The first F3 diagnostic test finally identified why the 0.2 snapshot architecture had not improved FPS.
+Outside HeroStand's render scope, the mixin preserves Palladium behavior and uses a normal context.
 
-User screenshot at the mixed-suit wall showed approximately:
-- **47 FPS**
-- **77% GPU**
-- approximately **501 MiB/s allocation**
-- `snap 0.0%`
-- `0 hit / 0 built`
-- `live=163672`
-- `blocked=163619`
-- `safetyReject=53`
+Palladium remains optional:
+- there is no mandatory Palladium entry in `mods.toml`;
+- compile-time Palladium access is only for the optional mixin;
+- the bridge remains guarded by Palladium presence.
 
-The arithmetic is decisive: the 53 visible HeroStands were each safety-rejected, then almost every later render went through the 30-second blocked/live fallback. The complete suit snapshot cache was doing **zero useful work**.
+### What 0.2.9 does NOT do
 
-The mistake was HeroStand's pre-cache policy, not the cache replay implementation: it assumed an unknown/add-on Palladium render-layer class was unsafe. That is incompatible with real Palladium add-on ecosystems where custom static layer implementations are normal.
+0.2.9 does not:
+- render a layer twice;
+- capture Gecko geometry;
+- read GL textures;
+- own suit VBOs;
+- replace Palladium RenderTypes;
+- re-sort translucent geometry;
+- freeze animations;
+- alter Satsu's model/texture/condition logic.
 
-## 0.2.2 stable-output snapshot policy
+## 0.2.9 F3 diagnostics
 
-0.2.2 changes the safety model from **class-name trust** to **observed render-output stability**.
-
-Preflight now rejects only behavior HeroStand positively knows is time-varying:
-- Palladium thruster layers;
-- Palladium lightning-spark layers;
-- armor/layer models implementing `ExtraAnimatedModel`.
+The debug line reports:
 
-Unknown/add-on/custom layer classes are allowed to attempt a snapshot.
+`HeroStand 0.2.9 planHit=... build=... plans=... layers=... calls=... condReuse=... condNew=... fallback=...`
 
-For every candidate snapshot, HeroStand renders the real Palladium SuitStand twice:
-1. first native capture at the current entity tick with partial tick 0.0;
-2. second native capture at entity tick + 7 with partial tick 0.5.
+Interpretation:
+- `planHit` should rise rapidly after the initial per-stand plan creation.
+- `build` should remain small and mostly track stand equipment changes/initial discovery.
+- `plans` should roughly reflect active HeroStand render plans.
+- `layers` is the number of discovered top-level Palladium layer entries across plans.
+- `calls` is the count of actual layer render invocations; each should still be a real native render.
+- `condReuse` confirms condition checks are using the shared context.
+- `condNew` is fallback condition-context construction.
+- `fallback` reports bridge failures.
 
-During both captures HeroStand hashes:
-- emitted vertex positions;
-- vertex colors/alpha;
-- UV coordinates;
-- overlay coordinates;
-- packed light coordinates;
-- normals;
-- vertex count;
-- resolved RenderType/texture identity;
-- whether partial vertex alpha was emitted.
-
-The snapshot is accepted only when:
-- both captures are render-type safe;
-- neither still needs camera-relative translucent sorting;
-- both complete emitted signatures match exactly.
-
-If they differ, the suit remains on Palladium's native live renderer. This catches time-varying custom layers without needing HeroStand to know the add-on's Java classes.
-
-This deliberately targets the real 0.2.1 failure: static third-party layers should finally enter the snapshot cache, while genuinely animated output remains live.
-
-The F3 line is shortened in 0.2.2 so the useful fields fit on screen:
-
-`HeroStand 0.2.2 snap=... hit=... build=... live=... dyn=... cap=... cache=...`
-
-For the same wall, the key success signal is no longer just FPS. First verify that `snap` climbs substantially above 0% and `cache` becomes nonzero. Only then does the snapshot architecture deserve an FPS comparison.
-
-## 0.2.2 measured result — capture-stage rejection
-
-PunctualBoat's 0.2.2 wall screenshot showed approximately:
-- **48 FPS**
-- **83% GPU**
-- approximately **470 MiB/s allocation**
-- `snap=0.0%`
-- `hit=0`
-- `build=0`
-- `live=86933`
-- `dyn=0`
-- `cap=106`
-- `cache=0`
-
-This proves the old safety classifier was no longer the blocker (`dyn=0`), but every attempted snapshot was still rejected at the **capture stage**.
-
-The main cause is Palladium's runtime/dynamic texture system:
-- many resolved textures are runtime `ResourceLocation` values registered directly with Minecraft's TextureManager;
-- they may not exist as normal ResourceManager files;
-- HeroStand's alpha classifier therefore cannot prove them binary/cutout;
-- Palladium commonly maps otherwise-static armor/layers to translucent RenderTypes;
-- 0.2.2 then rejected those RenderTypes because they requested quad sorting.
-
-The two-time-sample capture also caused **sky flicker** in PunctualBoat's test and must not be reintroduced.
-
-## 0.2.3 single-capture / sorted snapshot correction
-
-0.2.3 removes the failed two-pass capture experiment.
-
-New policy:
-- render the native Palladium SuitStand **once** when building a snapshot;
-- known thruster/lightning/ExtraAnimatedModel content still stays live;
-- unknown/custom static add-on layers may still attempt capture;
-- a RenderType requesting translucent sorting is **not grounds for rejecting the entire suit**;
-- those local-space quads are sorted once during snapshot upload with Minecraft's current VertexSorting;
-- the resulting GPU buffer is reused like other static suit geometry;
-- snapshot warm-up is limited to **one new suit per tick** to reduce one-frame spikes/state disturbance;
-- once a snapshot exists, the ItemStack-key hot path still bypasses Palladium reflection/context setup.
-
-The F3 line is now:
-
-`HeroStand 0.2.3 snap=... hit=... build=... live=... dyn=... cap=... cache=...`
-
-The first success condition for 0.2.3 is simple:
-- `cache` must become nonzero;
-- `build` must become nonzero;
-- after warm-up, `hit` should rise quickly and `snap` should become a substantial percentage;
-- repeated `cap` growth with `cache=0` means capture is still failing and should be treated as a bug, not as a performance result.
-
-## Distance and wall occlusion
-
-0.2.0 intentionally keeps the known 0.1.9 culling behavior separate from the visual renderer.
-
-Current behavior:
-- skip empty stands;
-- use the lower of client render distance and server maximum;
-- cached visibility sampling at head/chest/legs/sides;
-- solid occluding blocks hide fully blocked suits;
-- non-occluding hits can be skipped;
-- visible/hidden results refresh on short intervals;
-- camera movement accelerates refresh;
-- cache is cleared when the render level changes.
-
-Do not replace this simply because the visual renderer was rebuilt.
-
-## Non-Palladium armor
-
-If the equipped set is not a compatible Palladium suit, HeroStand uses a reusable invisible vanilla ArmorStand render context through Minecraft's normal `EntityRenderDispatcher`.
-
-Palladium is still an optional dependency.
-
-## Removed 0.1.x rendering experiments
-
-The 0.2.0 branch is based from the clean 0.1.9 line and does **not** carry forward the stacked 0.1.10–0.1.19 renderer implementation.
-
-In particular, the old manual `PalladiumRenderBridge` was removed from the 0.2.0 branch.
-
-Do not re-add the old GPU-vendor router, partial base-only VBO cache, fast manual model emitter, or layered renderer experiments unless a specific measured reason justifies doing so.
-
-## 0.2.3 validation priorities
-
-Test in this order:
-
-1. **Mark One/custom suit correctness**
-   - normal head placement;
-   - chest/legs/boots full normal SuitStand scale;
-   - no detached helmet;
-   - no mannequin geometry poking through.
-
-2. **Previously-correct Palladium suits**
-   - several Iron Man/superhero sets;
-   - different model shapes;
-   - glint/emissive effects;
-   - transparent/glass pieces.
-
-3. **Mixed-suit performance wall**
-   - use the same viewpoint used for the 0.1.17–0.2.0 screenshots;
-   - wait several seconds for snapshot warm-up;
-   - record FPS, GPU %, allocation rate, **and the HeroStand F3 diagnostic line**;
-   - repeated identical suits should share snapshots;
-   - do not judge the next architecture until the diagnostic line shows whether snapshot coverage is high or low.
-
-4. **Dynamic effects**
-   - thrusters/lightning/animated suit layers must remain animated and live.
-
-5. **Culling**
-   - move beyond configured distance and verify de-render/FPS recovery;
-   - hide stands behind a solid wall and verify culling;
-   - partially expose a stand and verify it remains visible.
-
-6. **Lifecycle**
-   - F3+T resource reload;
-   - leave/re-enter world;
-   - change equipment;
-   - change lighting;
-   - verify stale snapshots do not survive incorrectly.
-
-## Recipe
-
-3 iron blocks across the bottom row + 2 polished diorite vertically in the center:
-
-```
- D
- D
-III
-```
-
-D = polished diorite  
-I = iron block
+The important comparison is **allocation rate first**, then FPS/GPU load. 0.2.9 is specifically intended to remove repeated Java bookkeeping/garbage; it is not claimed to reduce Gecko geometry cost.
 
 ## Build / artifact handoff
 
-Build through GitHub Actions and hand PunctualBoat the compiled Forge JAR.
+Build via GitHub Actions and provide PunctualBoat the compiled Forge JAR, not merely the artifact ZIP.
 
 Before handing over a JAR:
-1. confirm the intended branch/commit;
-2. confirm the embedded mod version;
-3. confirm `mods.toml` author is **PunctualBoat**;
-4. validate the artifact/JAR contents;
-5. do not silently substitute a stale `main` build.
+1. verify the intended branch/commit;
+2. verify embedded mod version;
+3. verify author is **PunctualBoat**;
+4. verify expected renderer/mixin classes are present;
+5. do not silently substitute `main`.
 
-0.2.3 Actions reference:
-- branch: `rebuild/0.2.3-single-capture`
-- successful latest-head build: **run #90**
-- build commit: `9da80ff04e672203d4a7f4b3e68a3d896e15e355`
+0.2.9 build reference:
+- branch: `rebuild/0.2.9-render-plan-cache`
+- successful Actions run: **#109**
+- run ID: `35566822333`
+- successful head commit: `d961f23f90be78a38b5f4d2ace63fbb7954c2d6c`
 
-0.2.2 reference:
-- branch: `rebuild/0.2.2-stable-snapshot`
-- successful build: **run #87**
-- build commit: `614b76f803bae429fafd8ee051a58378f6905bc4`
+## Next testing order
 
-0.2.1 reference:
-- branch: `rebuild/0.2.1-cache-diagnostics`
-- successful build: **run #84**
-- build commit: `0bb878d8b5b4df4c0fbd17275f258f9f042dcec8`
-
-0.2.0 reference:
-- branch: `rebuild/0.2.0-native-snapshot`
-- successful build: **run #82**
-- build commit: `845c0a2f30b2b1e2e01086ccdda60d79d7a82831`
+1. Verify **no black/top-screen artifacting**.
+2. Verify **no crash**.
+3. Check Mark One and several other Satsu suits visually.
+4. Face the same mixed-suit wall for ~10 seconds.
+5. Capture F3 showing:
+   - FPS;
+   - GPU %;
+   - allocation rate;
+   - the full HeroStand 0.2.9 diagnostic line.
+6. Compare allocation rate against the prior ~450–500 MiB/s baseline.
+7. If allocation drops substantially but FPS stays ~50, the next target is the actual Gecko geometry/animation path and should be profiled rather than guessed.
+8. If allocation does not drop and `condReuse` is high, condition allocation is not the dominant cost; do not keep optimizing it.
 
 ## Development preference
 
-PunctualBoat prefers working/testable builds and measured changes.
+PunctualBoat wants measured, testable changes.
 
-For future performance work:
-- measure before adding another optimization layer;
-- preserve native Palladium visual correctness;
-- cache complete static work rather than optimizing tiny lookup fragments;
-- keep dynamic visuals live;
-- do not regress the working distance/wall culling behavior;
-- prefer simple architecture over accumulating renderer hacks.
-
-
-## 0.2.4 direct capture / rejection diagnostics
-
-0.2.4 captured Palladium's actual renderer directly and added `why=<reason>` to F3.
-
-PunctualBoat's wall test showed:
-- about **51 FPS**;
-- about **79% GPU**;
-- about **521 MiB/s allocation**;
-- `snap=0.0%`;
-- `hit=0`;
-- `build=0`;
-- `live=258616`;
-- `dyn=0`;
-- `cap=101`;
-- `cache=0`;
-- `why=sorted:RenderType[palladium:arm...]`.
-
-This proves the remaining cache blocker is Palladium's base armor RenderType being sorted/translucent, not the old dynamic-layer safety classifier.
-
-The same test still showed the black/flickering artifact at the top of the screen even though `cache=0`. Therefore the artifact cannot be caused by replaying a cached VBO. The runtime OpenGL texture-readback/binding experiment introduced in 0.2.4 is treated as the regression source and is removed in 0.2.5.
-
-## 0.2.5 translucent index cache
-
-0.2.5 changes the cache model instead of trying to force Palladium's runtime armor textures into cutout rendering.
-
-For sorted/translucent captured geometry:
-- capture the native Palladium suit geometry once;
-- call `BufferBuilder.setQuadSorting(...)` at capture time and keep its `SortState`;
-- upload vertex geometry once into a GPU `VertexBuffer`;
-- use a dynamic index buffer for sorted parts;
-- on each cached draw, transform the camera into the stand's local coordinates;
-- restore the saved `SortState`;
-- regenerate only sorted quad indices with `VertexSorting.byDistance(...)`;
-- upload the index-only `RenderedBuffer` to the existing VertexBuffer;
-- then draw with Palladium's original RenderType.
-
-This mirrors Minecraft 1.20.1's translucent chunk re-sort approach: geometry stays resident while camera-dependent index order changes.
-
-0.2.5 also:
-- removes all runtime `glGetTexImage` calls;
-- does not manually bind/read Palladium's uploaded textures;
-- keeps direct `SuitStandRenderer` capture rather than recursive EntityRenderDispatcher capture;
-- keeps known thruster/lightning/ExtraAnimatedModel behavior live;
-- preserves the pre-Palladium ItemStack snapshot lookup hot path;
-- preserves distance culling and cached wall occlusion;
-- keeps author / owner metadata as **PunctualBoat**.
-
-Validation priorities:
-1. confirm the black/top-screen flicker is gone;
-2. face the same mixed-suit wall for 10–20 seconds;
-3. verify `cache`, `build`, and then `hit` become nonzero and continue increasing;
-4. verify `snap` rises materially above the previous 0–1.9%;
-5. check transparent/glass suit layers while moving sideways so camera-dependent ordering can be observed;
-6. compare FPS, GPU%, and allocation only after snapshots have warmed.
-
-
-
-## 0.2.6 field result and 0.2.7 direction
-
-PunctualBoat's 0.2.6 wall test showed roughly **53 FPS**, about **82% GPU**, and about **488 MiB/s allocation**. The HeroStand F3 line reported approximately:
-
-`HeroStand 0.2.6 armor=1.8% hit=2772 build=1 layers=154006 unsafe=0 cap=104 cache=1 why=empty`
-
-Interpretation:
-- the split renderer was stable enough to run
-- only one useful base-armor snapshot existed
-- most suit cost is in Palladium pack/render layers rather than HumanoidArmorLayer
-- continuing to optimize only base armor is not useful for the mixed superhero wall
-
-0.2.7 therefore moves the cache to Palladium's pack-layer geometry, using Palladium's own `IPackRenderLayer.createSnapshot(...)` hook as the static-layer eligibility signal.
-
-0.2.7 implementation:
-- **no custom OpenGL state**
-- **no custom VBO replay**
-- **no index-only translucent resort/upload**
-- known snapshot-capable pack layers are rendered into primitive CPU vertex arrays once
-- the same layer is sampled twice at different animation times; changing output stays live
-- cached vertices are replayed into Minecraft's normal `MultiBufferSource`
-- Minecraft/Palladium continue to own RenderTypes, glint, transparency sorting, batching and final GPU drawing
-- unsupported/dynamic/empty layers stay live
-- cache is bounded to roughly **96 MiB**, max **256 entries**, and idle entries expire after **120 seconds**
-- cache and eligibility state clear on the existing renderer/session/resource lifecycle
-- author/owner remains **PunctualBoat**
-
-0.2.7 F3 diagnostics use:
-`HeroStand 0.2.7 pack=... hit=... build=... live=... dyn=... defer=... empty=... cache=... MiB why=...`
-
-The important validation signals are:
-- `build` and `cache` should rise above zero
-- `hit` should climb rapidly after warmup
-- `pack %` should become materially higher than the 0.2.6 base-armor 1.8%
-- allocation rate should be compared against the 0.2.6 ~488 MiB/s result
-- no black/top-screen artifacting, crash, Mark One regression, wall-culling regression, or distance-culling regression
-
-
-## 0.2.7 / 0.2.8 performance reset
-
-- **0.2.7 wall result:** ~49-50 FPS, ~74% GPU, ~456 MiB/s allocation, and F3 reported `pack=0.0%`, `build=0`, `cache=0`, `why=unsupported` while live/dynamic pack-layer counts climbed rapidly.
-- Root cause: HeroStand incorrectly used Palladium's `IPackRenderLayer.createSnapshot(...)` as a general static-layer eligibility test. It is not universal: e.g. `SkinOverlayPackRenderLayer` does not implement it, and the default layer snapshot hook exists primarily for Palladium's trail system.
-- **0.2.8 reset:** remove that eligibility gate. For ordinary Palladium pack layers, record emitted vertices twice into a CPU-only `MultiBufferSource` at different animation times and compare the results. No OpenGL calls or custom VBOs are involved in the comparison.
-- Known stateful effects such as `ThrusterPackRenderLayer` and `LightningSparksRenderLayer` remain live.
-- Static cached pack vertices are replayed through Minecraft's normal `MultiBufferSource`, leaving RenderType handling, glint, translucency sorting and batching to Minecraft/Palladium.
-- The low-value base-armor VBO snapshot path is no longer used in 0.2.8; 0.2.6 showed only ~1.8% base-armor cache coverage on the real mixed-suit wall.
-- External optimization research supports focusing on immediate-mode entity/block-entity vertex generation/buffering rather than GPU-vendor-specific shader hacks. The user's test instance does not currently include ImmediatelyFast or Embeddium, so HeroStand measurements are against the ordinary immediate rendering path.
+For future work:
+- read this handoff before touching the renderer;
+- do not repeat ruled-out approaches;
+- preserve native Palladium/Satsu/Gecko visual correctness;
+- preserve distance/wall culling;
+- use diagnostics/profiling to prove the next bottleneck before adding another renderer subsystem.
