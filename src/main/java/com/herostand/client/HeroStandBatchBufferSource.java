@@ -33,7 +33,12 @@ final class HeroStandBatchBufferSource implements MultiBufferSource {
     MultiBufferSource wrap(MultiBufferSource source) {
         // Destruction overlays and other wrappers can depend on intercepting getBuffer(). Do not
         // bypass those. The normal level renderer passes a BufferSource for ordinary block entities.
-        if (!(source instanceof MultiBufferSource.BufferSource)) {
+        /*
+         * Do not wrap subclasses. Mods such as ImmediatelyFast replace Minecraft's BufferSource
+         * with their own batching implementation; wrapping that would undo the optimization we are
+         * trying to emulate and can create unnecessary extra buffering.
+         */
+        if (source == null || source.getClass() != MultiBufferSource.BufferSource.class) {
             return source;
         }
 
