@@ -57,6 +57,7 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
     private long buildTick = Long.MIN_VALUE;
     private int buildsThisTick;
     private long lastSweepTick = Long.MIN_VALUE;
+    private String lastRejectReason = "none";
 
     /**
      * Fast path used every frame. It performs only the compact suit/light key lookup and never
@@ -157,10 +158,15 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
         buildTick = Long.MIN_VALUE;
         buildsThisTick = 0;
         lastSweepTick = Long.MIN_VALUE;
+        lastRejectReason = "none";
     }
 
     int size() {
         return snapshots.size();
+    }
+
+    String lastRejectReason() {
+        return lastRejectReason;
     }
 
     @Override
@@ -182,20 +188,42 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             renderer.render(new PoseStack(), capture, 0.0F);
 
             if (!capture.snapshotSafe()) {
+                lastRejectReason = capture.rejectReason();
                 capture.discard();
                 return null;
             }
 
             List<MeshPart> parts = capture.upload();
             if (parts.isEmpty()) {
+                lastRejectReason = "empty";
                 return null;
             }
 
+            lastRejectReason = "none";
             return new Snapshot(parts, gameTime);
         } catch (Throwable failure) {
+            lastRejectReason = compactFailure(failure);
             capture.discard();
             return null;
         }
+    }
+
+    private static String compactFailure(Throwable failure) {
+        Throwable root = failure;
+        int depth = 0;
+        while (root.getCause() != null && root.getCause() != root && depth++ < 8) {
+            root = root.getCause();
+        }
+
+        String name = root.getClass().getSimpleName();
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) return name;
+
+        message = message.replace('\n', ' ').replace('\r', ' ');
+        if (message.length() > 28) {
+            message = message.substring(0, 28);
+        }
+        return name + ":" + message;
     }
 
     private boolean consumeBuildBudget(long gameTime) {
@@ -308,6 +336,7 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
         private boolean finished;
         private boolean safe = true;
+        private String rejectReason = "none";
 
         CaptureSource(SnapshotRenderTypeResolver resolver) {
             this.resolver = resolver;
@@ -339,11 +368,35 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
             for (Bucket bucket : buckets.values()) {
                 bucket.drawType =
                         resolver.resolve(bucket.originalType, bucket.partialVertexAlpha);
-                bucket.sortBeforeUpload =
-                        resolver.requiresSorting(bucket.drawType);
+
+                /*
+                 * 0.2.3 proved that freezing camera-sorted translucent output can produce visible
+                 * screen/sky artifacts. Runtime Palladium textures now get a one-time GPU alpha
+                 * inspection first; if a layer still genuinely requires translucent sorting,
+                 * keep it live rather than caching a stale sorted VBO.
+                 */
+                if (resolver.requiresSorting(bucket.drawType)) {
+                    safe = false;
+                    rejectReason = "sorted:" + shortType(bucket.drawType);
+                    return false;
+                }
+
+                bucket.sortBeforeUpload = false;
             }
 
             return true;
+        }
+
+        String rejectReason() {
+            return rejectReason;
+        }
+
+        private static String shortType(RenderType type) {
+            String value = type.toString();
+            if (value.length() > 24) {
+                value = value.substring(0, 24);
+            }
+            return value;
         }
 
         long signature() {
@@ -376,15 +429,6 @@ final class StaticSuitSnapshotCache implements AutoCloseable {
 
             try {
                 for (Bucket bucket : buckets.values()) {
-                    if (bucket.sortBeforeUpload) {
-                        /*
-                         * Palladium frequently maps otherwise-static armor/layers to translucent
-                         * RenderTypes. Rejecting those made snapshot coverage 0%. Sort the local
-                         * quads once at capture time and reuse the uploaded buffer.
-                         */
-                        bucket.builder.setQuadSorting(RenderSystem.getVertexSorting());
-                    }
-
                     BufferBuilder.RenderedBuffer rendered =
                             bucket.builder.endOrDiscardIfEmpty();
                     if (rendered == null) continue;
