@@ -1,8 +1,16 @@
 package com.herostand.client;
 
 import com.herostand.world.HeroStandBlockEntity;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.model.EntityModel;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
+import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.core.Rotations;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.decoration.ArmorStand;
@@ -18,86 +26,50 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Minimal Palladium adapter used by the 0.2 renderer.
- *
- * Visual correctness is delegated to Palladium itself: HeroStand renders/captures a real
- * client-only Palladium SuitStand instead of recreating Palladium's transforms/models manually.
- * Reflection keeps Palladium optional.
- */
 final class PalladiumNativeBridge {
     private static final EquipmentSlot[] ARMOR_SLOTS = {
             EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET
     };
+    private static final String PACK_LAYER_RENDERER =
+            "net.threetag.palladium.client.renderer.renderlayer.PackRenderLayerRenderer";
     private static final Rotations ZERO = new Rotations(0.0F, 0.0F, 0.0F);
 
     private final boolean installed;
     private boolean healthy;
-
     private final Constructor<?> suitStandConstructor;
     private final Class<?> armorWithRendererClass;
     private final Class<?> armorRendererDataClass;
-    private final Class<?> addonItemClass;
-    private final Class<?> packLayerClass;
-    private final Class<?> skinOverlayLayerClass;
-    private final Class<?> compoundLayerClass;
-    private final Class<?> thrusterLayerClass;
-    private final Class<?> lightningLayerClass;
     private final Class<?> extraAnimatedModelClass;
-
     private final Method getCachedArmorRenderer;
-    private final Method getRenderLayers;
     private final Method getArmorModel;
     private final Method forArmorInSlot;
-    private final Method getAddonLayerContainer;
-    private final Method containerGet;
-    private final Method layerManagerGetInstance;
-    private final Method layerManagerGetLayer;
-    private final Method compoundLayers;
-
-    private final Method skinTypedGet;
-    private final Field packModelLookupField;
-    private final Field packModelField;
-    private final Method modelCacheGetModel;
-
-    private final Map<Item, RendererInfo> rendererCache = new IdentityHashMap<>();
+    private final Field livingRendererLayersField;
+    private final Map<Item, Object> rendererCache = new IdentityHashMap<>();
 
     private ArmorStand context;
     private Level contextLevel;
 
+    @SuppressWarnings("rawtypes")
+    private EntityModel parentModel;
+    @SuppressWarnings("rawtypes")
+    private RenderLayer armorLayer;
+    @SuppressWarnings("rawtypes")
+    private RenderLayer packLayer;
+
     PalladiumNativeBridge() {
         boolean present = ModList.get().isLoaded("palladium");
-
         Constructor<?> suitCtor = null;
         Class<?> armorInterface = null;
         Class<?> rendererData = null;
-        Class<?> addonItem = null;
-        Class<?> packLayer = null;
-        Class<?> skinLayer = null;
-        Class<?> compoundLayer = null;
-        Class<?> thrusterLayer = null;
-        Class<?> lightningLayer = null;
         Class<?> extraAnimated = null;
-
         Method cachedRenderer = null;
-        Method renderLayers = null;
         Method armorModel = null;
         Method armorContext = null;
-        Method addonContainer = null;
-        Method containerLayers = null;
-        Method managerInstance = null;
-        Method managerLayer = null;
-        Method childLayers = null;
-
-        Method skinGet = null;
-        Field packLookupField = null;
-        Field packModelField = null;
-        Method modelGet = null;
+        Field layers = null;
 
         if (present) {
             try {
                 ClassLoader loader = PalladiumNativeBridge.class.getClassLoader();
-
                 Class<?> suitStandClass = Class.forName(
                         "net.threetag.palladium.entity.SuitStand", false, loader);
                 armorInterface = Class.forName(
@@ -105,105 +77,42 @@ final class PalladiumNativeBridge {
                 rendererData = Class.forName(
                         "net.threetag.palladium.client.renderer.item.armor.ArmorRendererData",
                         false, loader);
-                addonItem = Class.forName(
-                        "net.threetag.palladium.item.IAddonItem", false, loader);
-
-                packLayer = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.PackRenderLayer",
-                        false, loader);
-                skinLayer = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.SkinOverlayPackRenderLayer",
-                        false, loader);
-                compoundLayer = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.CompoundPackRenderLayer",
-                        false, loader);
-                thrusterLayer = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.ThrusterPackRenderLayer",
-                        false, loader);
-                lightningLayer = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.LightningSparksRenderLayer",
-                        false, loader);
                 extraAnimated = Class.forName(
-                        "net.threetag.palladium.client.model.ExtraAnimatedModel",
-                        false, loader);
-
+                        "net.threetag.palladium.client.model.ExtraAnimatedModel", false, loader);
                 Class<?> dataContextClass = Class.forName(
                         "net.threetag.palladium.util.context.DataContext", false, loader);
-                Class<?> renderLayerContainerClass = Class.forName(
-                        "net.threetag.palladium.item.IAddonItem$RenderLayerContainer",
-                        false, loader);
-                Class<?> layerManagerClass = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.PackRenderLayerManager",
-                        false, loader);
-                Class<?> skinTypedValueClass = Class.forName(
-                        "net.threetag.palladium.util.SkinTypedValue", false, loader);
-                Class<?> modelCacheClass = Class.forName(
-                        "net.threetag.palladium.client.renderer.renderlayer.PackRenderLayer$ModelCache",
-                        false, loader);
 
                 suitCtor = suitStandClass.getConstructor(
                         Level.class, double.class, double.class, double.class);
-
                 cachedRenderer = armorInterface.getMethod("getCachedArmorRenderer");
-                renderLayers = rendererData.getMethod("getRenderLayers");
                 armorModel = rendererData.getMethod(
                         "getModel", LivingEntity.class, dataContextClass);
                 armorContext = dataContextClass.getMethod(
                         "forArmorInSlot", LivingEntity.class, EquipmentSlot.class);
 
-                addonContainer = addonItem.getMethod("getRenderLayerContainer");
-                containerLayers = renderLayerContainerClass.getMethod("get", String.class);
-                managerInstance = layerManagerClass.getMethod("getInstance");
-                managerLayer = layerManagerClass.getMethod("getLayer", ResourceLocation.class);
-                childLayers = compoundLayer.getMethod("layers");
-
-                skinGet = skinTypedValueClass.getMethod(
-                        "get", net.minecraft.world.entity.Entity.class);
-
-                packLookupField = packLayer.getDeclaredField("modelLookup");
-                packLookupField.setAccessible(true);
-
-                packModelField = packLayer.getDeclaredField("model");
-                packModelField.setAccessible(true);
-
-                modelGet = modelCacheClass.getMethod(
-                        "getModel", dataContextClass,
-                        Class.forName(
-                                "net.threetag.palladium.client.renderer.renderlayer.ModelTypes$Model",
-                                false, loader));
+                for (Field candidate : LivingEntityRenderer.class.getDeclaredFields()) {
+                    if (List.class.isAssignableFrom(candidate.getType())) {
+                        candidate.setAccessible(true);
+                        layers = candidate;
+                        break;
+                    }
+                }
+                if (layers == null) throw new IllegalStateException("renderer layers unavailable");
             } catch (Throwable ignored) {
                 present = false;
             }
         }
 
-        this.installed = present;
-        this.healthy = present;
-
-        this.suitStandConstructor = suitCtor;
-        this.armorWithRendererClass = armorInterface;
-        this.armorRendererDataClass = rendererData;
-        this.addonItemClass = addonItem;
-        this.packLayerClass = packLayer;
-        this.skinOverlayLayerClass = skinLayer;
-        this.compoundLayerClass = compoundLayer;
-        this.thrusterLayerClass = thrusterLayer;
-        this.lightningLayerClass = lightningLayer;
-        this.extraAnimatedModelClass = extraAnimated;
-
-        this.getCachedArmorRenderer = cachedRenderer;
-        this.getRenderLayers = renderLayers;
-        this.getArmorModel = armorModel;
-        this.forArmorInSlot = armorContext;
-        this.getAddonLayerContainer = addonContainer;
-        this.containerGet = containerLayers;
-        this.layerManagerGetInstance = managerInstance;
-        this.layerManagerGetLayer = managerLayer;
-        this.compoundLayers = childLayers;
-
-        this.skinTypedGet = skinGet;
-        this.packModelLookupField = packLookupField;
-        this.packModelField = packModelField;
-        this.modelCacheGetModel = modelGet;
+        installed = present;
+        healthy = present;
+        suitStandConstructor = suitCtor;
+        armorWithRendererClass = armorInterface;
+        armorRendererDataClass = rendererData;
+        extraAnimatedModelClass = extraAnimated;
+        getCachedArmorRenderer = cachedRenderer;
+        getArmorModel = armorModel;
+        forArmorInSlot = armorContext;
+        livingRendererLayersField = layers;
     }
 
     boolean isInstalled() {
@@ -212,20 +121,14 @@ final class PalladiumNativeBridge {
 
     boolean isPalladiumSuit(HeroStandBlockEntity stand) {
         if (!isInstalled()) return false;
-
         boolean found = false;
         try {
             for (int i = 0; i < HeroStandBlockEntity.SLOT_COUNT; i++) {
                 ItemStack stack = stand.getArmor(i);
                 if (stack.isEmpty()) continue;
                 found = true;
-
-                if (!armorWithRendererClass.isInstance(stack.getItem())) {
-                    return false;
-                }
-                if (rendererFor(stack.getItem()) == null) {
-                    return false;
-                }
+                if (!armorWithRendererClass.isInstance(stack.getItem())) return false;
+                if (rendererFor(stack.getItem()) == null) return false;
             }
             return found;
         } catch (Throwable failure) {
@@ -236,35 +139,33 @@ final class PalladiumNativeBridge {
 
     ArmorStand prepareContext(HeroStandBlockEntity stand, Level level) {
         if (!isInstalled()) return null;
-
         try {
             if (context == null || contextLevel != level) {
-                Object created = suitStandConstructor.newInstance(
-                        level, 0.0D, 0.0D, 0.0D);
+                Object created = suitStandConstructor.newInstance(level, 0.0D, 0.0D, 0.0D);
                 if (!(created instanceof ArmorStand armorStand)) {
                     disable();
                     return null;
                 }
-
                 context = armorStand;
                 contextLevel = level;
-
-                // Keep Palladium's normal scale/Y-offset semantics, but never show the physical
-                // mannequin itself. The HeroStand block supplies the pedestal.
                 context.setInvisible(true);
                 context.setNoBasePlate(false);
                 context.setShowArms(true);
-
                 context.setHeadPose(ZERO);
                 context.setBodyPose(ZERO);
                 context.setLeftArmPose(ZERO);
                 context.setRightArmPose(ZERO);
                 context.setLeftLegPose(ZERO);
                 context.setRightLegPose(ZERO);
+                if (!resolveNativeLayers(context)) {
+                    disable();
+                    return null;
+                }
             }
 
             copyEquipment(stand, context);
             pinRotation(context);
+            context.tickCount = (int) (level.getGameTime() & 0x7FFFFFFFL);
             return context;
         } catch (Throwable failure) {
             disable();
@@ -272,31 +173,64 @@ final class PalladiumNativeBridge {
         }
     }
 
-    /**
-     * Cheap known-dynamic preflight only.
-     *
-     * 0.2.1 proved that treating every unknown/add-on layer class as unsafe rejected the entire
-     * real-world suit wall. 0.2.2 therefore rejects only behavior we positively know is animated
-     * (thrusters, lightning, ExtraAnimatedModel). Unknown/custom layers are allowed to attempt a
-     * native capture; StaticSuitSnapshotCache then performs a two-time-sample stability check on
-     * the actual emitted render data before accepting the snapshot.
-     */
-    boolean isSnapshotSafe(ArmorStand suitStand) {
+    boolean isBaseArmorSnapshotSafe(ArmorStand suitStand) {
         if (!isInstalled() || suitStand == null) return false;
-
         try {
             for (EquipmentSlot slot : ARMOR_SLOTS) {
                 ItemStack stack = suitStand.getItemBySlot(slot);
                 if (stack.isEmpty()) continue;
-
-                Item item = stack.getItem();
-                if (!itemSnapshotSafe(item, suitStand, slot)) {
-                    return false;
-                }
+                Object renderer = rendererFor(stack.getItem());
+                if (renderer == null) return false;
+                Object dataContext = forArmorInSlot.invoke(null, suitStand, slot);
+                Object model = getArmorModel.invoke(renderer, suitStand, dataContext);
+                if (model != null && extraAnimatedModelClass.isInstance(model)) return false;
             }
-
             return true;
         } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    boolean renderBaseArmor(ArmorStand suitStand, PoseStack poseStack,
+                            MultiBufferSource buffers, int packedLight, float partialTick) {
+        if (!isInstalled() || armorLayer == null || parentModel == null) return false;
+        try {
+            prepareParentModel(suitStand, partialTick);
+            poseStack.pushPose();
+            try {
+                applySuitStandTransform(suitStand, poseStack);
+                armorLayer.render(
+                        poseStack, buffers, packedLight, suitStand,
+                        0.0F, 0.0F, partialTick,
+                        suitStand.tickCount + partialTick, 0.0F, 0.0F);
+            } finally {
+                poseStack.popPose();
+            }
+            return true;
+        } catch (Throwable failure) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    boolean renderLivePackLayers(ArmorStand suitStand, PoseStack poseStack,
+                                 MultiBufferSource buffers, int packedLight, float partialTick) {
+        if (!isInstalled() || packLayer == null || parentModel == null) return false;
+        try {
+            prepareParentModel(suitStand, partialTick);
+            poseStack.pushPose();
+            try {
+                applySuitStandTransform(suitStand, poseStack);
+                packLayer.render(
+                        poseStack, buffers, packedLight, suitStand,
+                        0.0F, 0.0F, partialTick,
+                        suitStand.tickCount + partialTick, 0.0F, 0.0F);
+            } finally {
+                poseStack.popPose();
+            }
+            return true;
+        } catch (Throwable failure) {
             return false;
         }
     }
@@ -305,125 +239,74 @@ final class PalladiumNativeBridge {
         rendererCache.clear();
         context = null;
         contextLevel = null;
+        parentModel = null;
+        armorLayer = null;
+        packLayer = null;
         healthy = installed;
     }
 
-    private boolean itemSnapshotSafe(Item item,
-                                     ArmorStand suitStand,
-                                     EquipmentSlot slot) throws Exception {
-        RendererInfo info = rendererFor(item);
-        if (info == null) return false;
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private boolean resolveNativeLayers(ArmorStand suitStand) throws Exception {
+        EntityRenderer<?> raw = Minecraft.getInstance()
+                .getEntityRenderDispatcher().getRenderer(suitStand);
+        if (!(raw instanceof LivingEntityRenderer renderer)) return false;
 
-        Object context = forArmorInSlot.invoke(null, suitStand, slot);
+        Object value = livingRendererLayersField.get(renderer);
+        if (!(value instanceof List<?> layers)) return false;
 
-        Object armorModel = getArmorModel.invoke(info.renderer, suitStand, context);
-        if (armorModel != null && extraAnimatedModelClass.isInstance(armorModel)) {
-            return false;
-        }
-
-        for (Object layer : info.layers) {
-            if (!layerSnapshotSafe(layer, suitStand, context)) return false;
-        }
-
-        if (addonItemClass.isInstance(item)) {
-            Object container = getAddonLayerContainer.invoke(item);
-            if (container != null) {
-                Object rawIds = containerGet.invoke(container, slot.getName());
-                if (rawIds instanceof List<?> ids && !ids.isEmpty()) {
-                    Object manager = layerManagerGetInstance.invoke(null);
-                    for (Object rawId : ids) {
-                        if (!(rawId instanceof ResourceLocation id)) return false;
-                        Object layer = layerManagerGetLayer.invoke(manager, id);
-                        if (layer == null || !layerSnapshotSafe(layer, suitStand, context)) {
-                            return false;
-                        }
-                    }
-                }
+        RenderLayer foundArmor = null;
+        RenderLayer foundPack = null;
+        for (Object layer : layers) {
+            if (layer instanceof HumanoidArmorLayer) {
+                foundArmor = (RenderLayer) layer;
+            } else if (layer != null
+                    && PACK_LAYER_RENDERER.equals(layer.getClass().getName())) {
+                foundPack = (RenderLayer) layer;
             }
         }
+        if (foundArmor == null || foundPack == null) return false;
 
+        parentModel = renderer.getModel();
+        armorLayer = foundArmor;
+        packLayer = foundPack;
         return true;
     }
 
-    private boolean layerSnapshotSafe(Object layer,
-                                      ArmorStand suitStand,
-                                      Object dataContext) throws Exception {
-        if (layer == null) return true;
-
-        if (thrusterLayerClass.isInstance(layer)
-                || lightningLayerClass.isInstance(layer)) {
-            return false;
-        }
-
-        if (skinOverlayLayerClass.isInstance(layer)) {
-            return true;
-        }
-
-        if (compoundLayerClass.isInstance(layer)) {
-            Object rawChildren = compoundLayers.invoke(layer);
-            if (!(rawChildren instanceof List<?> children)) return false;
-            for (Object child : children) {
-                if (!layerSnapshotSafe(child, suitStand, dataContext)) return false;
-            }
-            return true;
-        }
-
-        if (packLayerClass.isInstance(layer)) {
-            try {
-                Object modelLookup = packModelLookupField.get(layer);
-                Object modelType = skinTypedGet.invoke(modelLookup, suitStand);
-                Object modelCacheValue = packModelField.get(layer);
-                Object modelCache = skinTypedGet.invoke(modelCacheValue, suitStand);
-                Object model = modelCacheGetModel.invoke(modelCache, dataContext, modelType);
-                return model == null || !extraAnimatedModelClass.isInstance(model);
-            } catch (Throwable ignored) {
-                return false;
-            }
-        }
-
-        /*
-         * Unknown/add-on layers are not automatically dynamic. Palladium explicitly supports
-         * third-party render-layer parsers, and many add-on layers are just static model/texture
-         * wrappers. Let the native capture + stability comparison prove whether their emitted
-         * output is stable instead of rejecting them by Java class name.
-         */
-        return true;
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void prepareParentModel(ArmorStand suitStand, float partialTick) {
+        parentModel.attackTime = 0.0F;
+        parentModel.riding = false;
+        parentModel.young = false;
+        parentModel.prepareMobModel(suitStand, 0.0F, 0.0F, partialTick);
+        parentModel.setupAnim(
+                suitStand, 0.0F, 0.0F,
+                suitStand.tickCount + partialTick, 0.0F, 0.0F);
     }
 
-    private RendererInfo rendererFor(Item item) throws Exception {
-        if (rendererCache.containsKey(item)) {
-            return rendererCache.get(item);
-        }
+    private static void applySuitStandTransform(ArmorStand stand, PoseStack poseStack) {
+        poseStack.mulPose(Axis.YP.rotationDegrees(180.0F));
+        poseStack.scale(-1.0F, -1.0F, 1.0F);
+        poseStack.scale(0.9375F, 0.9375F, 0.9375F);
+        if (!stand.isNoBasePlate()) poseStack.translate(0.0D, -1.0D / 16.0D, 0.0D);
+        poseStack.translate(0.0D, -1.501D, 0.0D);
+    }
 
+    private Object rendererFor(Item item) throws Exception {
+        if (rendererCache.containsKey(item)) return rendererCache.get(item);
         Object renderer = getCachedArmorRenderer.invoke(item);
         if (renderer == null || !armorRendererDataClass.isInstance(renderer)) {
             rendererCache.put(item, null);
             return null;
         }
-
-        Object rawLayers = getRenderLayers.invoke(renderer);
-        List<?> layers = rawLayers instanceof List<?> list
-                ? List.copyOf(list)
-                : List.of();
-
-        RendererInfo info = new RendererInfo(renderer, layers);
-        rendererCache.put(item, info);
-        return info;
+        rendererCache.put(item, renderer);
+        return renderer;
     }
 
     private static void copyEquipment(HeroStandBlockEntity stand, ArmorStand context) {
-        context.setItemSlot(
-                EquipmentSlot.HEAD,
-                stand.getArmor(HeroStandBlockEntity.HEAD));
-        context.setItemSlot(
-                EquipmentSlot.CHEST,
-                stand.getArmor(HeroStandBlockEntity.CHEST));
-        context.setItemSlot(
-                EquipmentSlot.LEGS,
-                stand.getArmor(HeroStandBlockEntity.LEGS));
-        context.setItemSlot(
-                EquipmentSlot.FEET,
-                stand.getArmor(HeroStandBlockEntity.FEET));
+        context.setItemSlot(EquipmentSlot.HEAD, stand.getArmor(HeroStandBlockEntity.HEAD));
+        context.setItemSlot(EquipmentSlot.CHEST, stand.getArmor(HeroStandBlockEntity.CHEST));
+        context.setItemSlot(EquipmentSlot.LEGS, stand.getArmor(HeroStandBlockEntity.LEGS));
+        context.setItemSlot(EquipmentSlot.FEET, stand.getArmor(HeroStandBlockEntity.FEET));
     }
 
     private static void pinRotation(ArmorStand context) {
@@ -439,10 +322,7 @@ final class PalladiumNativeBridge {
 
     private void disable() {
         healthy = false;
-        rendererCache.clear();
-        context = null;
-        contextLevel = null;
+        reset();
+        healthy = false;
     }
-
-    private record RendererInfo(Object renderer, List<?> layers) {}
 }
