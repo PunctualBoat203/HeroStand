@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.15**
+Current test build: **0.1.16**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`render/0.1.16-cache-lifecycle`
+
+0.1.15 modern GPU branch:
 `render/0.1.15-modern-static-vbo`
 
 0.1.14 GPU failover branch:
@@ -310,6 +313,49 @@ Important limitations:
 - Test an animated/thruster suit to confirm pack effects remain animated.
 - If a visual issue occurs only on MODERN_STATIC, the session should still be able to use BALANCED_STREAM or GENERIC_NATIVE after a soft failure.
 
+## 0.1.16 cache lifecycle / VRAM hygiene pass
+
+0.1.16 keeps the modern RTX 30+/RX 6000+ static-VBO renderer from 0.1.15, but changes how those GPU buffers live and die.
+
+Problem found in 0.1.15:
+- A cache entry expired after roughly **40–59 ticks (2–3 seconds)** even if the exact same suit was continuously visible.
+- That prevented unbounded buildup, but it also caused unnecessary rebuilding/re-uploading of unchanged armor geometry.
+
+0.1.16 policy:
+- **Active cached meshes no longer expire on a short timer.**
+- The same four-slot equipment/NBT identity + same packed-light value reuses the exact same GPU VBO entry.
+- Rebuild happens naturally when equipment/NBT/light identity changes or when an entry has been evicted.
+- Entries unused for **45 seconds** are swept and their OpenGL VertexBuffers are explicitly closed/deleted.
+- Idle sweeping runs every **5 seconds on the client tick**, so walking far enough away that no HeroStand renders still retires old VBOs.
+- Each unique suit identity may retain at most **4 lighting variants**; adding another light variant removes the least-recently-used light variant for that suit.
+- The existing global access-ordered LRU ceiling remains the hard VRAM limit:
+  - RTX 30+ tier: 128 entries
+  - RX 6000+ tier: 112 entries
+- World changes still clear the cache.
+- Client logout clears the cache.
+- Client resource reload clears the cache.
+- Every eviction/clear calls `VertexBuffer.close()` so GL buffer IDs are actually released rather than merely removing Java references.
+- GPU cleanup is forced onto the render thread when a lifecycle callback arrives from another thread.
+
+Cache-key allocation cleanup:
+- 0.1.15 copied armor NBT into lookup keys while checking the cache.
+- 0.1.16 uses compact 64-bit slot fingerprints derived from item identity, damage, and NBT content hash.
+- This avoids copying up to four CompoundTags for every visible stand every frame while preserving a stable suit identity for practical cache use.
+
+Expected result:
+- A showroom of unchanged suits should warm once and then keep reusing those meshes.
+- Walking away for ~45 seconds should release unused GPU mesh entries even if the stands never enter the render loop again.
+- Returning later rebuilds only the entries actually needed.
+- VRAM use remains bounded by both per-suit lighting limits and the global LRU cap.
+
+0.1.16 validation:
+- Face the large mixed-suit wall for 10+ seconds and confirm allocation settles instead of periodically spiking every 2–3 seconds.
+- Stay near the wall for at least a minute; unchanged suits should not keep rebuilding merely because time passed.
+- Walk far away for over 45 seconds, return, and expect a short cache warm-up rather than accumulated old entries.
+- Resource-reload (F3+T) and verify suits recover after GPU cache purge/rebuild.
+- Leave/re-enter the world and verify no stale suit buffers survive the session transition.
+- Continue checking the custom black suit and distance/wall culling behavior.
+
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
 - Skips rendering when the stand has no armor.
@@ -362,7 +408,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.14 results, and current 0.1.15 modern-static build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.15 results, and current 0.1.16 cache-lifecycle build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -387,7 +433,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `render/0.1.15-modern-static-vbo` for the current modern-GPU test artifact; keep `render/0.1.14-gpu-backends` as the pure failover/context comparison, `optimize/0.1.13-static-palladium-cache` as the failed mixed-suit optimization comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
+3. Use `render/0.1.16-cache-lifecycle` for the current modern-GPU/cache-lifecycle test artifact; keep `render/0.1.15-modern-static-vbo` as the first VBO implementation comparison, `render/0.1.14-gpu-backends` as the pure failover/context comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
