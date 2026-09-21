@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.13**
+Current test build: **0.1.14**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`render/0.1.14-gpu-backends`
+
+0.1.13 mixed-suit branch:
 `optimize/0.1.13-static-palladium-cache`
 
 0.1.12 compatibility branch:
@@ -205,7 +208,55 @@ Why this specifically targets mixed suit types:
 - Check any suit with obviously animated thrusters/effects; unsupported dynamic layers must remain on Palladium's original path.
 - Confirm distance de-render and solid-wall occlusion remain unchanged.
 
-If 0.1.13 substantially reduces allocation but FPS remains low, the remaining bottleneck is the unavoidable per-frame geometry/vertex emission. The next architectural step would be a static vertex/VBO cache or batching layer keyed by suit visual + lighting, rather than further Java-side lookup caching.
+### 0.1.13 user result — failed performance/compatibility pass
+
+The user tested the 0.1.13 mixed-suit wall and reported:
+- roughly **40–50 FPS**
+- roughly **83% GPU usage**
+- roughly **471 MiB/s allocation rate**
+
+That is not a useful FPS improvement and confirms that lookup/allocation caching alone is insufficient. The render path is now strongly limited by actual suit/layer drawing and GPU work when many different suits are visible.
+
+The same test also corrected the previous compatibility diagnosis for one custom suit:
+- the head remains detached/floating
+- the **chest, legs, and boots are also rendered too small**
+- the body should occupy the normal HeroStand/SuitStand humanoid silhouette
+
+Do not describe 0.1.13 as a successful compatibility fix or performance fix.
+
+## 0.1.14 GPU backend + soft-fail architecture
+
+0.1.14 introduces a three-backend renderer instead of assuming one manual Palladium path is correct for every GPU and every suit.
+
+Backends:
+- **NVIDIA_FAST** — preferred first on NVIDIA. Uses HeroStand's aggressive direct armor + static Palladium layer acceleration.
+- **AMD_BALANCED** — preferred first on AMD. Uses Palladium's normal armor-layer hooks and normal pack-layer rendering while retaining HeroStand's lightweight block-entity path.
+- **GENERIC_NATIVE** — compatibility backend. Renders a reusable client-only Palladium SuitStand through Palladium's real SuitStandRenderer.
+
+GPU routing:
+- Detects OpenGL vendor/renderer at runtime.
+- NVIDIA order: NVIDIA_FAST -> AMD_BALANCED -> GENERIC_NATIVE.
+- AMD/Radeon order: AMD_BALANCED -> NVIDIA_FAST -> GENERIC_NATIVE.
+- Unknown/other GPU order: GENERIC_NATIVE -> AMD_BALANCED -> NVIDIA_FAST.
+- If a backend soft-fails, HeroStand immediately attempts the next backend for that stand.
+- Repeatedly failing backends are quarantined for the renderer session instead of repeatedly throwing every frame.
+- Distance culling and wall occlusion remain outside the backend system, so a renderer fallback cannot disable those proven optimizations.
+
+Custom-suit correctness change:
+- Palladium-backed rendering now uses a **real client-only Palladium SuitStand object as the render context** when Palladium is installed.
+- It is never spawned into the world, never enters the entity list, and never ticks.
+- This lets custom Palladium model selectors, DataContexts, model types, and pack layers see the entity type they were authored for instead of a plain ArmorStand.
+- The manual parent model is explicitly reset to Palladium SuitStand's neutral humanoid pivots rather than running normal living-entity idle animation setup.
+- GENERIC_NATIVE is the final correctness escape hatch and uses Palladium's actual SuitStandRenderer.
+
+0.1.14 priorities:
+- Retest the custom suit with the floating head and undersized chest/legs/boots.
+- Retest the large mixed-suit wall and record FPS/GPU/allocation.
+- Verify the log identifies NVIDIA on NVIDIA hardware and AMD/Radeon on AMD hardware.
+- Verify a backend failure falls through instead of crashing the client.
+- Verify distance culling and solid-wall occlusion remain unchanged.
+
+Important: vendor-specific routing is an **ordering/tuning policy**, not a promise that NVIDIA or AMD require proprietary rendering code. Correctness must remain capability-based and the native compatibility backend must always remain available.
 
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
@@ -259,7 +310,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10 result, 0.1.11 performance experiment, 0.1.12 compatibility fix, and current 0.1.13 mixed-suit performance build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10/0.1.11/0.1.12/0.1.13 results, and current 0.1.14 GPU-backend build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -284,7 +335,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `optimize/0.1.13-static-palladium-cache` for the current mixed-suit performance artifact; keep `compat/0.1.12-suitstand-parent` as the detached-helmet compatibility branch, `optimize/0.1.11-direct-palladium-armor` as the 0.1.11 experiment, `optimize/0.1.10-visible-path` as the 0.1.10 comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
+3. Use `render/0.1.14-gpu-backends` for the current GPU/failover test artifact; keep `optimize/0.1.13-static-palladium-cache` as the failed 0.1.13 comparison, `compat/0.1.12-suitstand-parent` for compatibility history, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
