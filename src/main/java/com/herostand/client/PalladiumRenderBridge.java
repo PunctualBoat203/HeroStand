@@ -18,6 +18,9 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.fml.ModList;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -46,10 +49,12 @@ final class PalladiumRenderBridge {
     private final Method getArmorTexture;
     private final Method getArmorTextureByKey;
     private final Method getArmorTranslucent;
-    private final Method forArmorInSlot;
-    private final Method dataContextWith;
-    private final Method renderLayer;
+    private final MethodHandle forArmorInSlot;
+    private final MethodHandle dataContextWith;
+    private final MethodHandle renderLayer;
     private final Object itemContextType;
+
+    private final PalladiumStaticLayerBridge staticLayers = new PalladiumStaticLayerBridge();
 
     /**
      * Identity caches are intentional: Minecraft Items are registry singletons. Once a static
@@ -97,9 +102,9 @@ final class PalladiumRenderBridge {
         Method armorTexture = null;
         Method armorTextureByKey = null;
         Method armorTranslucent = null;
-        Method dataContext = null;
-        Method contextWith = null;
-        Method layerRender = null;
+        MethodHandle dataContext = null;
+        MethodHandle contextWith = null;
+        MethodHandle layerRender = null;
         Object itemType = null;
 
         if (present) {
@@ -137,20 +142,41 @@ final class PalladiumRenderBridge {
                 armorTranslucent = palladiumRenderTypes.getMethod(
                         "getArmorTranslucent", ResourceLocation.class);
 
-                dataContext = dataContextClass.getMethod(
-                        "forArmorInSlot", net.minecraft.world.entity.LivingEntity.class, EquipmentSlot.class);
-                contextWith = dataContextClass.getMethod("with", dataContextTypeClass, Object.class);
+                MethodHandles.Lookup lookup = MethodHandles.lookup();
+
+                dataContext = lookup.unreflect(dataContextClass.getMethod(
+                                "forArmorInSlot",
+                                net.minecraft.world.entity.LivingEntity.class,
+                                EquipmentSlot.class))
+                        .asType(MethodType.methodType(
+                                Object.class,
+                                net.minecraft.world.entity.LivingEntity.class,
+                                EquipmentSlot.class));
+
+                contextWith = lookup.unreflect(dataContextClass.getMethod(
+                                "with", dataContextTypeClass, Object.class))
+                        .asType(MethodType.methodType(
+                                Object.class,
+                                Object.class, Object.class, Object.class));
+
                 itemType = dataContextTypeClass.getField("ITEM").get(null);
-                layerRender = renderLayerClass.getMethod(
-                        "render",
-                        dataContextClass,
-                        PoseStack.class,
-                        MultiBufferSource.class,
-                        EntityModel.class,
-                        int.class,
-                        float.class, float.class, float.class,
-                        float.class, float.class, float.class
-                );
+
+                layerRender = lookup.unreflect(renderLayerClass.getMethod(
+                                "render",
+                                dataContextClass,
+                                PoseStack.class,
+                                MultiBufferSource.class,
+                                EntityModel.class,
+                                int.class,
+                                float.class, float.class, float.class,
+                                float.class, float.class, float.class))
+                        .asType(MethodType.methodType(
+                                void.class,
+                                Object.class, Object.class,
+                                PoseStack.class, MultiBufferSource.class, EntityModel.class,
+                                int.class,
+                                float.class, float.class, float.class,
+                                float.class, float.class, float.class));
             } catch (Throwable ignored) {
                 present = false;
             }
@@ -235,7 +261,7 @@ final class PalladiumRenderBridge {
                 }
 
                 Object context = armorContexts[i];
-                dataContextWith.invoke(context, itemContextType, stack);
+                dataContextWith.invokeExact(context, itemContextType, (Object) stack);
 
                 RendererCache cache = rendererFor(stack.getItem());
                 if (cache == null) return false;
@@ -303,10 +329,18 @@ final class PalladiumRenderBridge {
                 dataContextWith.invoke(context, itemContextType, stack);
 
                 for (Object layer : cache.layers) {
-                    renderLayer.invoke(
-                            layer, context, poseStack, buffers, parentModel, packedLight,
-                            0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
+                    boolean handled = staticLayers.renderIfSupported(
+                            layer, context, entity, parentModel, stack, slot,
+                            poseStack, buffers, packedLight, partialTick,
+                            entity.level().getGameTime()
                     );
+
+                    if (!handled) {
+                        renderLayer.invokeExact(
+                                layer, context, poseStack, buffers, parentModel, packedLight,
+                                0.0F, 0.0F, partialTick, 0.0F, 0.0F, 0.0F
+                        );
+                    }
                 }
             }
         } catch (Throwable ignored) {
@@ -320,6 +354,7 @@ final class PalladiumRenderBridge {
         cachedContextEntity = null;
         directArmorHealthy = installed;
         clearDirectCache();
+        staticLayers.resetSessionCache();
 
         for (int i = 0; i < ARMOR_SLOTS.length; i++) {
             armorContexts[i] = null;
@@ -479,7 +514,10 @@ final class PalladiumRenderBridge {
 
         cachedContextEntity = entity;
         for (int i = 0; i < ARMOR_SLOTS.length; i++) {
-            armorContexts[i] = forArmorInSlot.invoke(null, entity, ARMOR_SLOTS[i]);
+            armorContexts[i] = (Object) forArmorInSlot.invokeExact(
+                    (net.minecraft.world.entity.LivingEntity) entity,
+                    ARMOR_SLOTS[i]
+            );
             lastSlotItems[i] = null;
             lastSlotRenderers[i] = null;
         }
@@ -526,6 +564,7 @@ final class PalladiumRenderBridge {
         rendererCache.clear();
         fastPathEligibility.clear();
         clearDirectCache();
+        staticLayers.resetSessionCache();
     }
 
     private record RendererCache(Object renderer, List<?> layers) {}
