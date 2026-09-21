@@ -2,7 +2,7 @@ name: Build HeroStand
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "rebuild/0.2.4-direct-capture-diag" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
