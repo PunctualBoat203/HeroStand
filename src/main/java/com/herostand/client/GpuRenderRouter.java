@@ -3,24 +3,34 @@ package com.herostand.client;
 import com.mojang.logging.LogUtils;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GLCapabilities;
 import org.slf4j.Logger;
 
 import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * Chooses HeroStand render strategies in a vendor-aware order, but never makes correctness depend
- * on a vendor string. Every backend remains independently usable and a recoverable failure falls
- * through to the remaining backends for the same stand.
+ * Chooses HeroStand render strategies by actual OpenGL capability first and GPU generation second.
+ *
+ * The modern path targets NVIDIA Ampere/RTX 30-series and newer, plus AMD RDNA2/RX 6000-series
+ * and newer. Correctness never depends on the vendor string: every accelerated backend has two
+ * independent fallbacks and repeated soft failures quarantine only the failing backend.
  */
 final class GpuRenderRouter {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int QUARANTINE_AFTER_FAILURES = 2;
 
+    private static final Pattern NVIDIA_RTX =
+            Pattern.compile("\\bRTX\\s*([0-9]{4})\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern AMD_RX =
+            Pattern.compile("\\bRX\\s*([0-9]{4})[A-Z]*\\b", Pattern.CASE_INSENSITIVE);
+
     enum Backend {
-        NVIDIA_FAST,
-        AMD_BALANCED,
+        MODERN_STATIC,
+        BALANCED_STREAM,
         GENERIC_NATIVE
     }
 
@@ -30,14 +40,24 @@ final class GpuRenderRouter {
         OTHER
     }
 
+    enum HardwareTier {
+        MODERN_NVIDIA,
+        MODERN_AMD,
+        COMPATIBILITY
+    }
+
     private final Map<Backend, Integer> consecutiveFailures = new EnumMap<>(Backend.class);
 
     private boolean initialized;
     private Vendor vendor = Vendor.OTHER;
+    private HardwareTier hardwareTier = HardwareTier.COMPATIBILITY;
     private String glVendor = "unknown";
     private String glRenderer = "unknown";
     private String glVersion = "unknown";
-    private boolean modernGl = true;
+
+    private boolean openGl45;
+    private boolean bufferStorage;
+    private boolean multiDrawIndirect;
 
     GpuRenderRouter() {
         for (Backend backend : Backend.values()) {
@@ -48,35 +68,51 @@ final class GpuRenderRouter {
     Backend[] orderedBackends() {
         initializeIfNeeded();
 
-        Backend[] preferred = switch (vendor) {
-            case NVIDIA -> new Backend[] {
-                    Backend.NVIDIA_FAST,
-                    Backend.AMD_BALANCED,
-                    Backend.GENERIC_NATIVE
-            };
-            case AMD -> new Backend[] {
-                    Backend.AMD_BALANCED,
-                    Backend.NVIDIA_FAST,
-                    Backend.GENERIC_NATIVE
-            };
-            case OTHER -> new Backend[] {
-                    Backend.GENERIC_NATIVE,
-                    Backend.AMD_BALANCED,
-                    Backend.NVIDIA_FAST
-            };
-        };
-
-        // If the driver only exposes an unexpectedly old GL feature set, prefer the path that
-        // relies most closely on Minecraft/Palladium's stock renderer.
-        if (!modernGl) {
+        if (supportsModernStatic()) {
             return new Backend[] {
-                    Backend.GENERIC_NATIVE,
-                    Backend.AMD_BALANCED,
-                    Backend.NVIDIA_FAST
+                    Backend.MODERN_STATIC,
+                    Backend.BALANCED_STREAM,
+                    Backend.GENERIC_NATIVE
             };
         }
 
-        return preferred;
+        return new Backend[] {
+                Backend.BALANCED_STREAM,
+                Backend.GENERIC_NATIVE,
+                Backend.MODERN_STATIC
+        };
+    }
+
+    boolean isSupported(Backend backend) {
+        initializeIfNeeded();
+        return backend != Backend.MODERN_STATIC || supportsModernStatic();
+    }
+
+    boolean supportsModernStatic() {
+        initializeIfNeeded();
+        return openGl45 && hardwareTier != HardwareTier.COMPATIBILITY;
+    }
+
+    int modernMeshLimit() {
+        initializeIfNeeded();
+        // Keep the first implementation conservative on VRAM. Static suit meshes are small, but
+        // each distinct light/equipment variant may own several GL buffers.
+        return switch (hardwareTier) {
+            case MODERN_NVIDIA -> 128;
+            case MODERN_AMD -> 112;
+            case COMPATIBILITY -> 64;
+        };
+    }
+
+    int modernBuildsPerTick() {
+        initializeIfNeeded();
+        // Upload a few meshes per game tick so a large showroom warms progressively instead of
+        // causing one huge first-frame upload spike.
+        return switch (hardwareTier) {
+            case MODERN_NVIDIA -> 3;
+            case MODERN_AMD -> 2;
+            case COMPATIBILITY -> 1;
+        };
     }
 
     boolean isHealthy(Backend backend) {
@@ -93,12 +129,12 @@ final class GpuRenderRouter {
 
         if (next == 1) {
             LOGGER.warn(
-                    "HeroStand renderer backend {} soft-failed on {} / {}. Falling through to another backend.",
+                    "HeroStand renderer backend {} soft-failed on {} / {}. Trying the next backend.",
                     backend, glVendor, glRenderer, failure
             );
         } else if (next == QUARANTINE_AFTER_FAILURES) {
             LOGGER.warn(
-                    "HeroStand renderer backend {} has soft-failed {} times and is quarantined for this renderer session.",
+                    "HeroStand renderer backend {} soft-failed {} times and is quarantined for this renderer session.",
                     backend, next
             );
         }
@@ -115,9 +151,14 @@ final class GpuRenderRouter {
         return vendor;
     }
 
+    HardwareTier hardwareTier() {
+        initializeIfNeeded();
+        return hardwareTier;
+    }
+
     String description() {
         initializeIfNeeded();
-        return vendor + " | " + glVendor + " | " + glRenderer + " | " + glVersion;
+        return descriptionWithoutInit();
     }
 
     private void initializeIfNeeded() {
@@ -143,21 +184,63 @@ final class GpuRenderRouter {
                 vendor = Vendor.AMD;
             }
 
-            try {
-                modernGl = GL.getCapabilities().OpenGL33;
-            } catch (Throwable ignored) {
-                modernGl = true;
+            GLCapabilities caps = GL.getCapabilities();
+            openGl45 = caps.OpenGL45;
+            bufferStorage = caps.OpenGL44 || caps.GL_ARB_buffer_storage;
+            multiDrawIndirect = caps.OpenGL43 || caps.GL_ARB_multi_draw_indirect;
+
+            if (vendor == Vendor.NVIDIA && isRtx30OrNewer(glRenderer)) {
+                hardwareTier = HardwareTier.MODERN_NVIDIA;
+            } else if (vendor == Vendor.AMD && isRx6000OrNewer(glRenderer)) {
+                hardwareTier = HardwareTier.MODERN_AMD;
             }
         } catch (Throwable failure) {
             vendor = Vendor.OTHER;
-            modernGl = false;
-            LOGGER.warn("HeroStand could not identify the OpenGL driver. Using compatibility-first ordering.", failure);
+            hardwareTier = HardwareTier.COMPATIBILITY;
+            openGl45 = false;
+            bufferStorage = false;
+            multiDrawIndirect = false;
+            LOGGER.warn(
+                    "HeroStand could not identify the OpenGL device. Using compatibility rendering.",
+                    failure
+            );
         }
 
         LOGGER.info("HeroStand GPU renderer routing: {}", descriptionWithoutInit());
     }
 
+    private static boolean isRtx30OrNewer(String renderer) {
+        Matcher matcher = NVIDIA_RTX.matcher(renderer == null ? "" : renderer);
+        if (!matcher.find()) return false;
+
+        try {
+            int model = Integer.parseInt(matcher.group(1));
+            int generation = model / 100;
+            return generation >= 30;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isRx6000OrNewer(String renderer) {
+        Matcher matcher = AMD_RX.matcher(renderer == null ? "" : renderer);
+        if (!matcher.find()) return false;
+
+        try {
+            int model = Integer.parseInt(matcher.group(1));
+            return model >= 6000;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
     private String descriptionWithoutInit() {
-        return vendor + " | " + glVendor + " | " + glRenderer + " | " + glVersion;
+        return hardwareTier
+                + " | " + glVendor
+                + " | " + glRenderer
+                + " | GL " + glVersion
+                + " | GL45=" + openGl45
+                + " | bufferStorage=" + bufferStorage
+                + " | multiDrawIndirect=" + multiDrawIndirect;
     }
 }
