@@ -141,7 +141,6 @@ public final class HeroStandRenderer
                                                                 0.0D,
                                                                 0.0D,
                                                                 0.0D,
-                                                                0.0D,
                                                                 0.0F,
                                                                 0.0F,
                                                                 localPose,
