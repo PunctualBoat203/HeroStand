@@ -1,135 +1,218 @@
 # HeroStand — Development Handoff
 
 ## Project
+
 HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero/modded armor displays, especially Palladium suits.
 
 Repository: `PunctualBoat203/HeroStand`  
+Author / owner: **PunctualBoat**  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.9**
+Current test build: **0.2.0**
 
-## IMPORTANT — active development line
-The current rendering work is **not on `main`**.
+## IMPORTANT — current development line
 
-Active branch:
-`optimize/0.1.7-palladium-culling`
+Active renderer rebuild branch:
 
-Relevant version points:
-- **0.1.8** commit: `9af1dc0ec57c7d6b0287ba78f17ba5e8f1e5f99a`
-- **0.1.9** branch head: `9438cb8f50b52ebf8834efb5977c56735f610076`
-- **0.1.9** GitHub Actions build completed successfully.
-- The user-provided **0.1.8 JAR is the rendering reference baseline**. Do not replace it with a build from stale `main`.
+`rebuild/0.2.0-native-snapshot`
 
-The default `main` branch currently contains the older 0.1.6 renderer generation. A JAR built from `main` was tested after 0.1.8 and the user reported that rendering became worse and behaved incorrectly around block occlusion. Do not hand out a `main` build as the latest HeroStand build unless the active rendering branch has first been merged or deliberately superseded.
+0.2.0 is a **ground-up rendering/visual rebuild**. It is intentionally not another layer on top of the 0.1.10–0.1.19 renderer experiments.
 
-## Core architecture
-HeroStand must remain a **block + non-ticking block entity**, not a persistent ArmorStand/LivingEntity/world entity.
+The rebuild starts conceptually from the **0.1.8/0.1.9 behavior the user liked**, while replacing the Palladium visual renderer itself.
 
-The block entity stores four equipment slots:
-- Head
-- Chest
-- Legs
-- Feet
+Known reference points:
+- **0.1.8** user-provided JAR: original newer rendering reference.
+- **0.1.9**: known baseline with configurable client/server render distance and working cached wall occlusion.
+- **0.1.17**: Mark One visual issue confirmed fixed, but mixed-suit FPS still poor.
+- **0.1.18**: roughly 49 FPS / 63% GPU / 476 MiB/s allocation in the mixed-suit wall.
+- **0.1.19**: no meaningful improvement and may have been worse.
+- **0.2.0**: clean renderer reset described below.
 
-Client-side rendering may use temporary/reusable ArmorStand render contexts, but these are never added to the world entity list and never tick server-side.
+Do not call an old `main` code build the latest renderer. The handoff on `main` may describe a newer test branch than the code currently merged there.
 
-Important goals:
-- No AI, health, movement, collision/entity ticking, or powers running on a fake wearer.
-- Safe equipment persistence and multiplayer synchronization.
-- Breaking the stand returns its equipment.
-- Entity purge commands such as `/kill @e` cannot target the HeroStand itself.
-- No hard dependency on Palladium, HeroClock, or OmniOptimizer.
+## What must remain
 
-## Current visual direction
-The user prefers the mannequin/body to remain **invisible by default**. A suit should appear to stand on the pedestal by itself.
+These are validated user preferences / working behaviors and should be preserved unless PunctualBoat explicitly asks otherwise:
 
-Do not restore a visible white mannequin unless specifically requested.
+- HeroStand remains a **block + non-ticking block entity**, not a persistent world ArmorStand/LivingEntity.
+- Four equipment slots: head, chest, legs, feet.
+- The mannequin/body is **invisible by default**.
+- The visible base remains a simple clean light/white iron-like pedestal.
+- Block facing controls suit facing exactly once; do not reintroduce interpolation/yaw fighting.
+- No vibration/jitter.
+- Distance de-render works and is configurable.
+- Server can cap the client's suit render distance.
+- Solid-wall occlusion works and FPS recovers when stands are hidden.
+- Partial visibility around wall/block edges should not incorrectly hide a suit.
+- Palladium remains optional; HeroStand must still load without it.
+- Mark One/custom suit proportions must remain correct.
+- Breaking the stand returns its equipment once.
+- `/kill @e` and entity purge logic must not target HeroStand itself.
+- Author / owner attribution is **PunctualBoat**.
 
-The base should remain simple, clean, and light/white iron-like.
+## Why the 0.1.x optimization stack was abandoned
 
-## Rendering baseline — 0.1.8
-0.1.8 is the current user-provided reference JAR for correct/newer rendering behavior.
+The user stress-tested a large mixed wall of Palladium suits.
 
-Its renderer generation includes:
-- A reusable client-only ArmorStand render context.
-- Stable current + previous rotation state to avoid interpolation jitter.
-- Facing applied once through the PoseStack rather than fighting entity/dispatcher yaw.
-- A Palladium-specific fast path for compatible armor.
-- Reflective Palladium integration so Palladium remains optional.
-- Cached Palladium armor renderer metadata for static suit displays.
-- A fallback through Minecraft's normal EntityRenderDispatcher for unsupported/non-Palladium armor.
-- Cached block-occlusion visibility checks.
-- A 21-block suit render distance in 0.1.8.
-- Invisible mannequin / pedestal-only visual direction.
+Observed 0.1.x results included:
+- roughly 40–55 FPS with many visible mixed suits;
+- GPU load frequently 60–90%;
+- allocation around 470–500 MiB/s;
+- several Java-side caching/VBO/batching experiments produced little or no real FPS gain.
 
-Relevant 0.1.8 commits:
-- `82f3c06ddd3f3a328aee52de1bbca44e7bbed9e0` — optional Palladium fast render bridge
-- `dcf77f9566836843158bb6819b1943539e2fd268` — Palladium fast path + cached occlusion culling
-- `6f993b53fb5f2c4aca7814cca355dc048915ecd0` — prepare 0.1.7
-- `a2c8d20a1bd2e4e2c436b691ea5671cbc7584edc` — match Palladium suit stand pose / reduce static render work
-- `950798e807f836dbfbeb2c8b71691a9a5457ac3d` — cache Palladium renderer metadata
-- `9af1dc0ec57c7d6b0287ba78f17ba5e8f1e5f99a` — prepare 0.1.8
+The important conclusion is that HeroStand should stop trying to manually reimplement more and more of Palladium's renderer while still drawing every suit as a dynamic entity every frame.
 
-## Current build — 0.1.9
-0.1.9 continues from the 0.1.8 rendering path. It does **not** revert to the old 0.1.6 renderer.
+0.2.0 therefore resets the visual architecture.
 
-Changes after 0.1.8 are primarily render-distance/configuration work:
-- Client render-distance config.
-- Client config registration.
-- Server-authoritative maximum suit render distance.
-- Server config registration.
-- Client uses the lower of client render distance and server maximum.
-- Version bumped to 0.1.9.
+## 0.2.0 ground-up renderer
 
-Relevant commits after 0.1.8:
-- `88727fe91f419389d17be2fe50094006b4c41482` — configurable HeroStand render distance
-- `ad99ea2a7124cc66c8701863b1d70e8c79a4a25a` — register client config
-- `73cf15f102583cd0e447ed8b880f375be371985e` — use configurable suit render distance
-- `669d9a801f92f7902a09c523da51fd414184bf7c` — server-authoritative render limits
-- `e2e5ec0a5d412919d89c4830be4927e1ae851f22` — register server config
-- `d4ca28b1e04a96c086853ccd901808b6649a1c34` — enforce server render-distance cap on clients
-- `9438cb8f50b52ebf8834efb5977c56735f610076` — prepare 0.1.9
+### Core rule: Palladium owns Palladium visuals
 
-## Current renderer behavior
-`HeroStandRenderer` on the active branch:
-- Skips rendering when the stand has no armor.
-- Uses a Palladium fast path when every equipped item supports it.
-- Uses a normal EntityRenderDispatcher fallback otherwise.
-- Copies the four equipment slots into reusable ArmorStand render contexts.
-- Pins YRot/YHeadRot/yBodyRot/XRot and their previous values to deterministic zero state.
-- Applies block `FACING` once through the PoseStack.
-- Mirrors Palladium's SuitStand model transforms in the fast path.
-- Uses several visibility sample points for cached block-occlusion checks.
-- Caches visible/occluded results briefly and refreshes more quickly when the camera moves.
-- Uses an effective render distance controlled by client config and capped by server config in 0.1.9.
+HeroStand no longer manually recreates Palladium's suit transforms/models/layer math for the normal Palladium path.
 
-`PalladiumRenderBridge`:
-- Accesses Palladium reflectively.
-- Keeps HeroStand loadable when Palladium is absent.
-- Caches Palladium renderer/layer metadata per registry Item.
-- Renders armor pack layers for the static display.
-- Does not intentionally run player powers/AI/world entity behavior.
+When Palladium armor is present, HeroStand creates a **real client-only Palladium SuitStand object** reflectively and lets Palladium's actual `SuitStandRenderer` produce the visual.
 
-## Regression warning
-Do **not** treat the stale 0.1.5/0.1.6 README state on old commits as current guidance.
+The temporary SuitStand:
+- is never added to the world entity list;
+- never ticks as a world entity;
+- has no AI/gameplay role;
+- exists only as a client render context;
+- is invisible so the HeroStand block/pedestal remains the visible base.
 
-In particular:
-- Do not rebuild from `main` and call that the latest JAR.
-- Do not remove the 0.1.8/0.1.9 Palladium fast path unless deliberately debugging it.
-- Do not remove cached occlusion behavior without an explicit replacement/test.
-- Do not reintroduce double-applied entity + dispatcher yaw.
-- Do not claim a renderer change is better until compared in-game against the user's 0.1.8 reference JAR.
+This is the visual-correctness baseline for custom suits such as Mark One.
 
-## Known history
-Earlier builds had:
-- Purple/black missing-model problems caused by invalid block-model geometry extending beyond valid baked-model bounds.
-- A visible/static mannequin approach that is no longer wanted.
-- Suit orientation mismatch and interpolation vibration.
-- Renderer state reuse issues caused by stale current/previous rotations.
+### Complete static suit snapshots
 
-Those issues led to the stabilized rotation strategy and then the newer 0.1.8 Palladium/occlusion renderer line.
+For suits that are safe to treat as static, HeroStand captures the **complete native Palladium SuitStand visual** into GPU-resident static buffers.
+
+This is different from the failed 0.1.15/0.1.16 VBO experiment:
+- the old experiment cached only part of the suit while Palladium pack layers still rendered live;
+- 0.2.0 captures the **whole known-static native visual**, including base armor and known-static pack layers.
+
+A cached snapshot is keyed by:
+- all four equipped armor item identities;
+- armor damage/NBT state;
+- packed light.
+
+Repeated stands wearing the exact same suit under the same packed-light value reuse the same snapshot.
+
+Facing is applied outside the snapshot, so north/east/south/west stands do not require duplicate mesh caches.
+
+### What is NOT frozen
+
+HeroStand refuses to snapshot visuals that are not proven safe.
+
+These stay on Palladium's live native renderer:
+- thruster layers;
+- lightning-spark layers;
+- unknown/custom render-layer classes;
+- ExtraAnimatedModel armor/layer models;
+- textures/layers that still require true partial-alpha translucent sorting;
+- any snapshot build that fails or cannot be classified safely.
+
+This is intentional. Visual correctness wins over cache coverage.
+
+### Alpha handling
+
+Palladium commonly uses blended translucent RenderTypes even for armor textures that are effectively cutout/opaque.
+
+For snapshot capture only:
+- static texture resources are scanned once;
+- textures containing only alpha 0 or 255 may use vanilla cutout/no-cull rendering;
+- any alpha value 1–254 remains truly translucent;
+- generated/dynamic textures that cannot be proven safe remain live.
+
+True camera-relative translucent geometry is not stored in a reusable snapshot.
+
+### Snapshot lifecycle / VRAM limits
+
+The snapshot cache is bounded:
+- maximum **192** complete suit/light snapshots;
+- maximum **4 lighting variants per unique suit**;
+- maximum **2 new snapshot builds per game tick** so a showroom warms progressively;
+- unused snapshots are retired after **120 seconds**;
+- sweep runs every **5 seconds**, including while stands are offscreen;
+- world changes clear snapshots;
+- logout clears snapshots;
+- resource reload clears snapshots;
+- every eviction explicitly closes the OpenGL `VertexBuffer`.
+
+The hot path for an already-cached suit is only:
+1. compute compact suit/light identity;
+2. find snapshot;
+3. replay GPU buffers.
+
+It does not redo Palladium renderer/model safety inspection on every cache hit.
+
+## Distance and wall occlusion
+
+0.2.0 intentionally keeps the known 0.1.9 culling behavior separate from the visual renderer.
+
+Current behavior:
+- skip empty stands;
+- use the lower of client render distance and server maximum;
+- cached visibility sampling at head/chest/legs/sides;
+- solid occluding blocks hide fully blocked suits;
+- non-occluding hits can be skipped;
+- visible/hidden results refresh on short intervals;
+- camera movement accelerates refresh;
+- cache is cleared when the render level changes.
+
+Do not replace this simply because the visual renderer was rebuilt.
+
+## Non-Palladium armor
+
+If the equipped set is not a compatible Palladium suit, HeroStand uses a reusable invisible vanilla ArmorStand render context through Minecraft's normal `EntityRenderDispatcher`.
+
+Palladium is still an optional dependency.
+
+## Removed 0.1.x rendering experiments
+
+The 0.2.0 branch is based from the clean 0.1.9 line and does **not** carry forward the stacked 0.1.10–0.1.19 renderer implementation.
+
+In particular, the old manual `PalladiumRenderBridge` was removed from the 0.2.0 branch.
+
+Do not re-add the old GPU-vendor router, partial base-only VBO cache, fast manual model emitter, or layered renderer experiments unless a specific measured reason justifies doing so.
+
+## 0.2.0 validation priorities
+
+Test in this order:
+
+1. **Mark One/custom suit correctness**
+   - normal head placement;
+   - chest/legs/boots full normal SuitStand scale;
+   - no detached helmet;
+   - no mannequin geometry poking through.
+
+2. **Previously-correct Palladium suits**
+   - several Iron Man/superhero sets;
+   - different model shapes;
+   - glint/emissive effects;
+   - transparent/glass pieces.
+
+3. **Mixed-suit performance wall**
+   - use the same viewpoint used for the 0.1.17–0.1.19 screenshots;
+   - wait several seconds for snapshot warm-up;
+   - record FPS, GPU %, and allocation rate;
+   - repeated identical suits should share snapshots.
+
+4. **Dynamic effects**
+   - thrusters/lightning/animated suit layers must remain animated and live.
+
+5. **Culling**
+   - move beyond configured distance and verify de-render/FPS recovery;
+   - hide stands behind a solid wall and verify culling;
+   - partially expose a stand and verify it remains visible.
+
+6. **Lifecycle**
+   - F3+T resource reload;
+   - leave/re-enter world;
+   - change equipment;
+   - change lighting;
+   - verify stale snapshots do not survive incorrectly.
 
 ## Recipe
+
 3 iron blocks across the bottom row + 2 polished diorite vertically in the center:
 
 ```
@@ -141,37 +224,30 @@ III
 D = polished diorite  
 I = iron block
 
-## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR** and current 0.1.9 build:
-
-- Empty stand: pedestal only is acceptable/preferred.
-- Full Palladium suit renders completely.
-- Non-Palladium/unsupported armor still uses the fallback path.
-- No mannequin geometry pokes through.
-- North/east/south/west facings match the block exactly.
-- No vibration or interpolation fighting over several seconds.
-- Two or more nearby stands facing different directions remain stable.
-- Suits do not disappear incorrectly when partly visible around block edges.
-- Fully hidden suits are culled as intended.
-- Camera movement does not leave a stale occlusion result for an excessive time.
-- Client/server render-distance cap behaves as configured.
-- Equip/remove each slot.
-- Break equipped stand and verify each item drops once.
-- Save/reload and verify equipment persists.
-- Multiplayer sync if available.
-- Creative-tab icon/model remains valid.
-
 ## Build / artifact handoff
-Build through GitHub Actions and hand the user the compiled Forge JAR.
+
+Build through GitHub Actions and hand PunctualBoat the compiled Forge JAR.
 
 Before handing over a JAR:
-1. Confirm the build came from the intended branch/commit.
-2. Confirm the embedded mod version.
-3. Prefer the active `optimize/0.1.7-palladium-culling` line until it is merged/superseded.
-4. Do not silently substitute a `main` artifact.
-5. Validate the downloaded artifact/JAR before delivery.
+1. confirm the intended branch/commit;
+2. confirm the embedded mod version;
+3. confirm `mods.toml` author is **PunctualBoat**;
+4. validate the artifact/JAR contents;
+5. do not silently substitute a stale `main` build.
 
-## User preference
-Prioritize working/testable builds over speculative features.
+0.2.0 Actions reference:
+- branch: `rebuild/0.2.0-native-snapshot`
+- successful build: **run #82**
+- build commit: `845c0a2f30b2b1e2e01086ccdda60d79d7a82831`
 
-Preserve the 0.1.8 rendering behavior as the reference point. Optimize or extend it incrementally, and treat regressions in suit visibility, Palladium rendering, orientation, or occlusion as higher priority than new features.
+## Development preference
+
+PunctualBoat prefers working/testable builds and measured changes.
+
+For future performance work:
+- measure before adding another optimization layer;
+- preserve native Palladium visual correctness;
+- cache complete static work rather than optimizing tiny lookup fragments;
+- keep dynamic visuals live;
+- do not regress the working distance/wall culling behavior;
+- prefer simple architecture over accumulating renderer hacks.
