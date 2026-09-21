@@ -27,7 +27,7 @@ import java.util.List;
         targets = "net.threetag.palladium.client.renderer.renderlayer.IPackRenderLayer",
         remap = false
 )
-public interface PalladiumConditionMixin {
+public abstract class PalladiumConditionMixin {
 
     @Inject(
             method = "conditionsFulfilled(Lnet/minecraft/world/entity/Entity;Ljava/util/List;)Z",
