@@ -12,6 +12,7 @@ import net.minecraft.world.level.Level;
 import net.minecraftforge.fml.ModList;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -55,8 +56,8 @@ final class PalladiumNativeBridge {
     private final Method compoundLayers;
 
     private final Method skinTypedGet;
-    private final Method packModelLookupGet;
-    private final Method packModelCacheGet;
+    private final Field packModelLookupField;
+    private final Field packModelField;
     private final Method modelCacheGetModel;
 
     private final Map<Item, RendererInfo> rendererCache = new IdentityHashMap<>();
@@ -90,8 +91,8 @@ final class PalladiumNativeBridge {
         Method childLayers = null;
 
         Method skinGet = null;
-        Method packLookupGet = null;
-        Method packCacheGet = null;
+        Field packLookupField = null;
+        Field packModelField = null;
         Method modelGet = null;
 
         if (present) {
@@ -159,8 +160,13 @@ final class PalladiumNativeBridge {
 
                 skinGet = skinTypedValueClass.getMethod(
                         "get", net.minecraft.world.entity.Entity.class);
-                packLookupGet = packLayer.getMethod("getModelLookup");
-                packCacheGet = packLayer.getMethod("getModel");
+
+                packLookupField = packLayer.getDeclaredField("modelLookup");
+                packLookupField.setAccessible(true);
+
+                packModelField = packLayer.getDeclaredField("model");
+                packModelField.setAccessible(true);
+
                 modelGet = modelCacheClass.getMethod(
                         "getModel", dataContextClass,
                         Class.forName(
@@ -196,8 +202,8 @@ final class PalladiumNativeBridge {
         this.compoundLayers = childLayers;
 
         this.skinTypedGet = skinGet;
-        this.packModelLookupGet = packLookupGet;
-        this.packModelCacheGet = packCacheGet;
+        this.packModelLookupField = packLookupField;
+        this.packModelField = packModelField;
         this.modelCacheGetModel = modelGet;
     }
 
@@ -367,9 +373,9 @@ final class PalladiumNativeBridge {
 
         if (packLayerClass.isInstance(layer)) {
             try {
-                Object modelLookup = packModelLookupGet.invoke(layer);
+                Object modelLookup = packModelLookupField.get(layer);
                 Object modelType = skinTypedGet.invoke(modelLookup, suitStand);
-                Object modelCacheValue = packModelCacheGet.invoke(layer);
+                Object modelCacheValue = packModelField.get(layer);
                 Object modelCache = skinTypedGet.invoke(modelCacheValue, suitStand);
                 Object model = modelCacheGetModel.invoke(modelCache, dataContext, modelType);
                 return model == null || !extraAnimatedModelClass.isInstance(model);
