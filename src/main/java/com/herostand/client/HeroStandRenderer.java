@@ -37,6 +37,8 @@ import java.util.WeakHashMap;
 public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlockEntity> {
     private static final Set<HeroStandRenderer> ACTIVE_RENDERERS =
             Collections.newSetFromMap(new WeakHashMap<>());
+    private static final HeroStandBatchBufferSource SHARED_BATCH =
+            new HeroStandBatchBufferSource();
 
     /*
      * Distance and wall occlusion are already proven useful by user testing. Keep those rules
@@ -120,6 +122,10 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
         }
     }
 
+    static void flushSharedBatch() {
+        SHARED_BATCH.flush();
+    }
+
     /**
      * Called from the Forge client tick so idle VBOs are retired even while every HeroStand is
      * outside render distance and renderOrBuild(...) is not running.
@@ -140,6 +146,8 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
      */
     static void clearAllGpuCaches() {
         Runnable clearTask = () -> {
+            SHARED_BATCH.discard();
+
             synchronized (ACTIVE_RENDERERS) {
                 for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
                     if (renderer.staticArmorCache != null) {
@@ -175,6 +183,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                 : null;
 
         float rotation = stand.getBlockState().getValue(HeroStandBlock.FACING).toYRot();
+        MultiBufferSource heroBuffers = SHARED_BATCH.wrap(buffers);
 
         poseStack.pushPose();
         try {
@@ -186,31 +195,47 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
             if (palladiumContext != null) {
                 resetParentModel();
 
-                for (GpuRenderRouter.Backend backend : gpuRouter.orderedBackends()) {
-                    if (!gpuRouter.isHealthy(backend)) continue;
-
+                /*
+                 * Correctness preflight happens before any vertices are emitted. A visually-wrong
+                 * custom model is not an exception, so soft-failure alone cannot catch it.
+                 */
+                if (palladium.requiresNativeRenderer(palladiumContext)) {
                     try {
-                        if (!gpuRouter.isSupported(backend)) continue;
-
-                        boolean success = switch (backend) {
-                            case MODERN_STATIC -> renderModernStaticPath(
-                                    palladiumContext, partialTick, poseStack, buffers, packedLight
-                            );
-                            case BALANCED_STREAM -> renderBalancedStreamPath(
-                                    palladiumContext, partialTick, poseStack, buffers, packedLight
-                            );
-                            case GENERIC_NATIVE -> renderNativePalladiumPath(
-                                    palladiumContext, partialTick, poseStack, buffers, packedLight
-                            );
-                        };
-
-                        if (success) {
-                            gpuRouter.recordSuccess(backend);
-                            rendered = true;
-                            break;
-                        }
+                        rendered = renderNativePalladiumPath(
+                                palladiumContext, partialTick, poseStack, heroBuffers, packedLight
+                        );
                     } catch (Throwable failure) {
-                        gpuRouter.recordSoftFailure(backend, failure);
+                        gpuRouter.recordSoftFailure(
+                                GpuRenderRouter.Backend.GENERIC_NATIVE, failure
+                        );
+                    }
+                } else {
+                    for (GpuRenderRouter.Backend backend : gpuRouter.orderedBackends()) {
+                        if (!gpuRouter.isHealthy(backend)) continue;
+
+                        try {
+                            if (!gpuRouter.isSupported(backend)) continue;
+
+                            boolean success = switch (backend) {
+                                case MODERN_STATIC -> renderModernStaticPath(
+                                        palladiumContext, partialTick, poseStack, heroBuffers, packedLight
+                                );
+                                case BALANCED_STREAM -> renderBalancedStreamPath(
+                                        palladiumContext, partialTick, poseStack, heroBuffers, packedLight
+                                );
+                                case GENERIC_NATIVE -> renderNativePalladiumPath(
+                                        palladiumContext, partialTick, poseStack, heroBuffers, packedLight
+                                );
+                            };
+
+                            if (success) {
+                                gpuRouter.recordSuccess(backend);
+                                rendered = true;
+                                break;
+                            }
+                        } catch (Throwable failure) {
+                            gpuRouter.recordSoftFailure(backend, failure);
+                        }
                     }
                 }
             }
@@ -220,7 +245,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
                         prepareFallbackRenderContext(stand, level),
                         partialTick,
                         poseStack,
-                        buffers,
+                        heroBuffers,
                         packedLight
                 );
             }
