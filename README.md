@@ -582,3 +582,13 @@ The important validation signals are:
 - allocation rate should be compared against the 0.2.6 ~488 MiB/s result
 - no black/top-screen artifacting, crash, Mark One regression, wall-culling regression, or distance-culling regression
 
+
+## 0.2.7 / 0.2.8 performance reset
+
+- **0.2.7 wall result:** ~49-50 FPS, ~74% GPU, ~456 MiB/s allocation, and F3 reported `pack=0.0%`, `build=0`, `cache=0`, `why=unsupported` while live/dynamic pack-layer counts climbed rapidly.
+- Root cause: HeroStand incorrectly used Palladium's `IPackRenderLayer.createSnapshot(...)` as a general static-layer eligibility test. It is not universal: e.g. `SkinOverlayPackRenderLayer` does not implement it, and the default layer snapshot hook exists primarily for Palladium's trail system.
+- **0.2.8 reset:** remove that eligibility gate. For ordinary Palladium pack layers, record emitted vertices twice into a CPU-only `MultiBufferSource` at different animation times and compare the results. No OpenGL calls or custom VBOs are involved in the comparison.
+- Known stateful effects such as `ThrusterPackRenderLayer` and `LightningSparksRenderLayer` remain live.
+- Static cached pack vertices are replayed through Minecraft's normal `MultiBufferSource`, leaving RenderType handling, glint, translucency sorting and batching to Minecraft/Palladium.
+- The low-value base-armor VBO snapshot path is no longer used in 0.2.8; 0.2.6 showed only ~1.8% base-armor cache coverage on the real mixed-suit wall.
+- External optimization research supports focusing on immediate-mode entity/block-entity vertex generation/buffering rather than GPU-vendor-specific shader hacks. The user's test instance does not currently include ImmediatelyFast or Embeddium, so HeroStand measurements are against the ordinary immediate rendering path.
