@@ -147,6 +147,7 @@ public final class HeroStandRenderer implements BlockEntityRenderer<HeroStandBlo
     static void clearAllGpuCaches() {
         Runnable clearTask = () -> {
             SHARED_BATCH.discard();
+            SHARED_BATCH.clearOptimizationCaches();
 
             synchronized (ACTIVE_RENDERERS) {
                 for (HeroStandRenderer renderer : ACTIVE_RENDERERS) {
