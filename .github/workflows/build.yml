@@ -2,7 +2,7 @@ name: Build HeroStand
 
 on:
   push:
-    branches: [ "main", "optimize/0.1.11-direct-palladium-armor" ]
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
