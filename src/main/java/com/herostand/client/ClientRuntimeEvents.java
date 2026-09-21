@@ -4,6 +4,7 @@ import com.herostand.HeroStand;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
+import net.minecraftforge.client.event.CustomizeGuiOverlayEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -26,6 +27,11 @@ public final class ClientRuntimeEvents {
         if (level != null) {
             HeroStandRenderer.tickCaches(level.getGameTime());
         }
+    }
+
+    @SubscribeEvent
+    public static void onDebugText(CustomizeGuiOverlayEvent.DebugText event) {
+        event.getLeft().add(HeroStandRenderer.debugLine());
     }
 
     @SubscribeEvent
