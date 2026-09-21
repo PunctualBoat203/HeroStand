@@ -6,12 +6,15 @@ HeroStand is a standalone Minecraft **Forge 1.20.1** mod for optimized superhero
 Repository: `PunctualBoat203/HeroStand`  
 Java: **17**  
 Forge: **47.4.10**  
-Current test build: **0.1.14**
+Current test build: **0.1.15**
 
 ## IMPORTANT — active development line
 The current rendering work is **not on `main`**.
 
 Active test branch:
+`render/0.1.15-modern-static-vbo`
+
+0.1.14 GPU failover branch:
 `render/0.1.14-gpu-backends`
 
 0.1.13 mixed-suit branch:
@@ -258,6 +261,55 @@ Custom-suit correctness change:
 
 Important: vendor-specific routing is an **ordering/tuning policy**, not a promise that NVIDIA or AMD require proprietary rendering code. Correctness must remain capability-based and the native compatibility backend must always remain available.
 
+## 0.1.15 modern GPU static-buffer experiment
+
+0.1.15 is the first HeroStand build that does more than vendor ordering: it adds a real GPU-resident static-geometry path for modern desktop/laptop GPUs.
+
+Target hardware:
+- NVIDIA **GeForce RTX 30-series (Ampere) and newer** when the OpenGL renderer string identifies an RTX 30/40/50 generation device and the driver exposes OpenGL 4.5+.
+- AMD **Radeon RX 6000-series (RDNA2) and newer** when the renderer identifies RX 6000/7000/9000-class hardware and the driver exposes OpenGL 4.5+.
+- Other/older GPUs remain on the streaming/native compatibility paths.
+
+Why this direction:
+- Minecraft Forge 1.20.1 renders HeroStand through OpenGL, so RTX ray-tracing cores, CUDA, DLSS, ROCm, etc. are not the useful integration point here.
+- The useful modern-GPU behavior is keeping immutable model geometry resident in GPU vertex/index buffers and avoiding rebuilding/uploading the same static armor vertices every frame.
+- NVIDIA's graphics guidance emphasizes larger batches / fewer repeated API submissions; AMD's RDNA guidance likewise emphasizes reducing small repeated command work and keeping resources in appropriate GPU-local usage patterns.
+- HeroStand therefore targets immutable suit geometry first rather than proprietary vendor-only APIs.
+
+0.1.15 implementation:
+- New **MODERN_STATIC** backend.
+- Detects RTX 30+ / RX 6000+ plus OpenGL capabilities at runtime.
+- Builds the **base armor geometry** into Minecraft `VertexBuffer.Usage.STATIC` buffers.
+- Reuses those GPU-resident buffers for subsequent frames instead of re-running the base armor model's Java vertex emission every frame.
+- Cache key includes all four armor slots/NBT plus packed light, so differently lit/equipped stands do not accidentally share incorrect vertex lighting.
+- Cached meshes expire and refresh periodically so world/context-driven armor model changes are not frozen forever.
+- Uses a small per-tick upload budget (NVIDIA: 3 new meshes/tick, AMD: 2) so a large showroom warms progressively instead of causing one giant first-frame upload stall.
+- Uses an LRU-style cache with a conservative entry cap (NVIDIA: 128, AMD: 112) and explicitly deletes old GL buffers.
+- **Palladium pack layers are intentionally still rendered live** in 0.1.15. They may contain animated/custom effects, so this first VBO pass does not freeze them.
+- Keeps the real client-only Palladium SuitStand render context introduced in 0.1.14.
+
+Three-backend failover in 0.1.15:
+1. **MODERN_STATIC** — RTX 30+/RX 6000+ static base-armor VBO path.
+2. **BALANCED_STREAM** — normal Palladium armor hooks + live pack layers, no static VBO.
+3. **GENERIC_NATIVE** — Palladium's actual SuitStandRenderer.
+
+If MODERN_STATIC is unsupported, its upload budget is full for that tick, or it cannot safely build a direct base-armor mesh, it simply falls through to BALANCED_STREAM. Recoverable renderer exceptions still fall through and repeatedly failing backends are quarantined for the renderer session.
+
+Important limitations:
+- This is not yet full suit batching or instanced rendering.
+- Mixed suits with very heavy Palladium pack-layer geometry can still be expensive because those layers remain live.
+- The next escalation, only if 0.1.15 proves stable, is to profile which pack-layer classes are truly static and cache/batch those separately without freezing thrusters/lightning/custom animated layers.
+- A later region/instance batching design could reduce draw submissions further, but that requires more invasive shader/render-stage work and should not be attempted until the base static-buffer path is proven visually correct.
+
+0.1.15 validation:
+- On the RTX 3050 test machine, confirm the log reports `MODERN_NVIDIA` and `MODERN_STATIC`.
+- Repeat the large mixed-suit wall test and record FPS, GPU%, and allocation rate after standing still for 5–10 seconds so the VBO cache has time to warm.
+- Turn away / move back to confirm existing distance and wall culling still recover FPS.
+- Retest the custom black suit with the detached head / undersized body.
+- Watch for transparency/glint ordering regressions because the base armor is now drawn from a GPU-resident buffer while pack layers remain live.
+- Test an animated/thruster suit to confirm pack effects remain animated.
+- If a visual issue occurs only on MODERN_STATIC, the session should still be able to use BALANCED_STREAM or GENERIC_NATIVE after a soft failure.
+
 ## Current renderer behavior
 `HeroStandRenderer` on the active branch:
 - Skips rendering when the stand has no armor.
@@ -310,7 +362,7 @@ D = polished diorite
 I = iron block
 
 ## Testing checklist
-For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10/0.1.11/0.1.12/0.1.13 results, and current 0.1.14 GPU-backend build:
+For renderer changes, test against the **0.1.8 reference JAR**, 0.1.9 baseline, 0.1.10–0.1.14 results, and current 0.1.15 modern-static build:
 
 - Empty stand: pedestal only is acceptable/preferred.
 - Full Palladium suit renders completely.
@@ -335,7 +387,7 @@ Build through GitHub Actions and hand the user the compiled Forge JAR.
 Before handing over a JAR:
 1. Confirm the build came from the intended branch/commit.
 2. Confirm the embedded mod version.
-3. Use `render/0.1.14-gpu-backends` for the current GPU/failover test artifact; keep `optimize/0.1.13-static-palladium-cache` as the failed 0.1.13 comparison, `compat/0.1.12-suitstand-parent` for compatibility history, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
+3. Use `render/0.1.15-modern-static-vbo` for the current modern-GPU test artifact; keep `render/0.1.14-gpu-backends` as the pure failover/context comparison, `optimize/0.1.13-static-palladium-cache` as the failed mixed-suit optimization comparison, and `optimize/0.1.7-palladium-culling` as the 0.1.9 baseline.
 4. Do not silently substitute a `main` artifact.
 5. Validate the downloaded artifact/JAR before delivery.
 
